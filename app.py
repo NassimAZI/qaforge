@@ -42,16 +42,32 @@ def _is_rate_limit(e: Exception) -> bool:
     return "429" in msg or "RESOURCE_EXHAUSTED" in msg or "rate_limit" in msg.lower()
 
 def _retry(fn, *args, max_retries: int = 3, **kwargs):
-    """Call fn(*args, **kwargs) up to max_retries times on rate-limit errors."""
+    """Call fn(*args, **kwargs) up to max_retries times on rate-limit errors.
+    Free-tier TPM quotas reset on a ~1-minute window, so rate-limit waits must
+    be long enough to land in the NEXT window — 2/4/8s retries were guaranteed
+    to fail inside the same saturated minute."""
     for attempt in range(max_retries):
         try:
             return fn(*args, **kwargs)
         except Exception as e:
             if _is_rate_limit(e) and attempt < max_retries - 1:
-                wait = 5 * (attempt + 1)  # 5s, 10s
+                # Providers usually announce the exact wait ("try again in 7.6s")
+                m = re.search(r"(?:try again|retry)[^\d]{0,20}([\d.]+)\s*s", str(e), re.IGNORECASE)
+                wait = min(float(m.group(1)) + 1, 90) if m else 20 * (attempt + 1)
                 time.sleep(wait)
             else:
                 raise
+
+
+# Free tiers (Groq notably) RESERVE input + max_tokens against the per-minute
+# quota BEFORE the call — over-asking max_tokens "just in case" saturates the
+# whole minute even for a tiny login-page request. Cap requests on those tiers.
+FREE_TIER_PROVIDERS = ("Groq", "Mistral", "OpenRouter")
+
+def effective_max_tokens(requested: int) -> int:
+    if st.session_state.get("provider") in FREE_TIER_PROVIDERS:
+        return min(requested, 3000)
+    return requested
 
 @st.cache_resource
 def _gemini_client(key: str):
@@ -126,6 +142,7 @@ def call_openai(history, system_prompt, user_message, images=None, max_tokens=30
     return text
 
 def call_llm(history, system_prompt, user_message, images=None, max_tokens=3000):
+    max_tokens = effective_max_tokens(max_tokens)
     """Unified entry point — routes to the right provider."""
     provider = st.session_state.provider
     if provider == "Gemini":
@@ -164,6 +181,7 @@ def call_llm_json(system_prompt, user_message, max_tokens=8000):
     instruction-based JSON for the others (Groq / Mistral / OpenRouter).
     API errors (auth, rate-limit, model not found) are RAISED — never
     silently swallowed into a second doomed call."""
+    max_tokens = effective_max_tokens(max_tokens)
     provider = st.session_state.provider
 
     if provider == "Gemini":
@@ -227,7 +245,7 @@ def _generate_tc_batch(plan_ctx, batch):
         f"Write ONE detailed test case for EACH of these {len(batch)} scenarios, "
         f"keeping the exact `id`, `title`, `priority` and `covers` given:\n{batch_list}"
     )
-    parsed = call_llm_json(PROMPT_P3_GEN, msg, max_tokens=8000)
+    parsed = call_llm_json(PROMPT_P3_GEN, msg, max_tokens=min(800 * len(batch) + 800, 6000))
     tcs = parsed.get("test_cases", []) if isinstance(parsed, dict) else parsed
     got = {tc.get("id"): tc for tc in tcs if isinstance(tc, dict) and tc.get("id") in want}
 
@@ -241,7 +259,7 @@ def _generate_tc_batch(plan_ctx, batch):
             PROMPT_P3_GEN,
             f"{plan_ctx}\n\nWrite ONE detailed test case for EACH of these scenarios, "
             f"keeping the exact `id`, `title` and `priority` given:\n{retry_list}",
-            max_tokens=8000,
+            max_tokens=min(800 * len(missing) + 800, 6000),
         )
         tcs2 = parsed2.get("test_cases", []) if isinstance(parsed2, dict) else parsed2
         for tc in tcs2:
@@ -266,7 +284,8 @@ def generate_test_cases_in_batches(plan_ctx, scenarios, batch_size=6):
             text=f"Generating test cases… batch {idx + 2}/{total}" if idx + 1 < total else "✅ Done!",
         )
         if idx + 1 < total:
-            time.sleep(1)  # be gentle with RPM limits between batches
+            # Free-tier TPM windows are per-minute: pace batches accordingly
+            time.sleep(20 if st.session_state.get("provider") in FREE_TIER_PROVIDERS else 1)
 
     progress.empty()
     generated_ids = {tc.get("id") for tc in all_tcs}
@@ -416,6 +435,40 @@ def normalize_rules(raw_rules):
             out.append({"id": r.get("id") or f"BR-{i}", "rule": r.get("rule") or r.get("text") or str(r)})
         else:
             out.append({"id": f"BR-{i}", "rule": str(r)})
+    return out
+
+
+def build_compact_context(max_chars=6000):
+    """Lean context for Phase 3 batches and modification chats.
+    The full p1_context (story + summary + rules + Q&A + chat transcript) was
+    being repeated in EVERY batch and EVERY chat message — the main token sink
+    on free-tier models. This keeps only what test-case writing needs."""
+    parts = [f"User Story:\n{st.session_state.get('p1_user_story', '')[:3000]}"]
+    if st.session_state.get("p1_summary"):
+        parts.append(f"Feature summary: {st.session_state.p1_summary}")
+    rules = st.session_state.get("p1_business_rules", [])
+    if rules:
+        parts.append("Business rules:\n" + "\n".join(f"- {r['id']}: {r['rule']}" for r in rules))
+    qa = [
+        f"- {q['question']} → {st.session_state.p1_answers[q['id']]}"
+        for q in st.session_state.get("p1_questions", [])
+        if str(st.session_state.get("p1_answers", {}).get(q["id"], "")).strip()
+    ]
+    if qa:
+        parts.append("Clarified details:\n" + "\n".join(qa))
+    return "\n\n".join(parts)[:max_chars]
+
+
+def compact_tcs_for_prompt(tcs, user_msg):
+    """Token-lean view of test cases for the Phase 3 chat: FULL detail only for
+    TCs explicitly referenced in the user message (TC-n), compact for the rest."""
+    referenced = {f"TC-{n}" for n in re.findall(r"TC[-\s]?(\d+)", user_msg, re.IGNORECASE)}
+    out = []
+    for tc in tcs:
+        if tc.get("id") in referenced or not referenced and len(tcs) <= 8:
+            out.append(tc)
+        else:
+            out.append({k: tc.get(k) for k in ("id", "title", "technique", "priority", "covers")})
     return out
 
 
@@ -730,6 +783,10 @@ Happy Path | Alternate Flow | BVA | Equivalence | Decision Table | State Transit
 Very High | High | Medium | Low
 
 ## HARD CONSTRAINTS — in priority order (if constraints conflict, the higher one wins)
+0. USER OVERRIDE: if the user explicitly requests a specific number or maximum of
+   scenarios (e.g. "10 scenarios max"), that request BEATS every constraint below.
+   Keep the N most critical scenarios (highest priority + broadest rule coverage)
+   and state in "summary" which business rules are left uncovered as a result.
 1. TRACEABILITY: every business rule covered by at least one scenario.
 2. TECHNIQUE COMPLETENESS: apply ALL relevant techniques — do NOT skip one to reduce count.
 3. SCENARIO BUDGET: target 6–20 scenarios based on complexity
@@ -813,6 +870,10 @@ Rules:
   "covers" (BR-x ids) conventions as the existing plan.
 - "remove": ids of scenarios to delete.
 - "modify": only the id plus the fields that change (title, category, priority, covers).
+- A user COUNT request ("keep only 10", "réduis à 8") is a REMOVE operation: put the
+  ids of ALL scenarios beyond the requested count in "remove" — keep the most critical
+  ones (priority + rule coverage). Verify: current count − removed = requested count.
+  The user's count beats coverage and technique completeness.
 - Untouched scenarios must NOT appear anywhere in your output.
 - Use empty arrays when nothing applies. If the user only asks a question, answer in
   "reply" and leave the three arrays empty.
@@ -1337,6 +1398,13 @@ if st.session_state.active_phase == 1:
                         )
                     prompt += f"\n\n[Visuals attached: {' + '.join(img_summary_parts)}]"
 
+                est_tokens = len(prompt) // 4
+                if est_tokens > 15000:
+                    st.warning(
+                        f"⚠️ ~{est_tokens:,} input tokens (documents included). "
+                        f"Free-tier models (Groq, OpenRouter, Mistral free) will likely hit "
+                        f"rate limits — reduce uploaded files or use Gemini."
+                    )
                 with st.spinner(f"Analyzing with {provider} / `{model_choice}`…"):
                     try:
                         raw = call_llm([], PROMPT_P1_QUESTIONS, prompt, images or None, max_tokens=3000)
@@ -1557,7 +1625,16 @@ if st.session_state.active_phase == 1:
             )
             with st.spinner("📋 Generating test plan…"):
                 try:
-                    parsed_p2 = call_llm_json(p2_prompt, ctx, max_tokens=5000)
+                    try:
+                        parsed_p2 = call_llm_json(p2_prompt, ctx, max_tokens=5000)
+                    except (ValueError, json.JSONDecodeError):
+                        # Likely truncated under free-tier token caps → one retry, tighter plan
+                        parsed_p2 = call_llm_json(
+                            p2_prompt,
+                            ctx + "\n\nIMPORTANT: maximum 12 scenarios — prioritise "
+                                  "business-rule coverage; merge BVA boundaries per field.",
+                            max_tokens=5000,
+                        )
                     st.session_state.p2_scenarios = normalize_scenarios(parsed_p2.get("scenarios", []))
                     st.session_state.p2_summary = parsed_p2.get("summary", "")
                     st.session_state.p2_overlaps = parsed_p2.get("potential_overlaps", []) or []
@@ -1643,7 +1720,7 @@ elif st.session_state.active_phase == 2:
                     msg = (
                         f"{st.session_state.get('lang_directive', '')}"
                         f"BUSINESS RULES:\n{rules_txt}\n\n"
-                        f"CONTEXT:\n{st.session_state.p1_context}\n\n"
+                        f"CONTEXT:\n{build_compact_context(max_chars=3000)}\n\n"
                         f"CURRENT PLAN (JSON):\n{current_plan}\n\n"
                         f"Perform the critical self-review now."
                     )
@@ -1719,7 +1796,7 @@ elif st.session_state.active_phase == 2:
                     f"{st.session_state.get('lang_directive', '')}"
                     f"CURRENT PLAN (JSON):\n{current_plan}\n\n"
                     f"BUSINESS RULES:\n{rules_txt}\n\n"
-                    f"CONTEXT:\n{st.session_state.p1_context}\n\n"
+                    f"CONTEXT:\n{build_compact_context(max_chars=3000)}\n\n"
                     f"USER REQUEST:\n{reply2}"
                 )
                 ops = call_llm_json(PROMPT_P2_MODIFY, msg, max_tokens=4000)
@@ -1760,12 +1837,12 @@ elif st.session_state.active_phase == 2:
         plan_ctx = (
             f"Validated test plan ({len(tc_scenarios)} scenarios):\n\n"
             f"{plan_lines}\n\n"
-            f"Feature summary: {st.session_state.get('p2_summary', '')}\n\n"
-            f"Context:\n{st.session_state.p1_context}"
+            f"Context:\n{build_compact_context()}"
         )
 
+        batch_size = 3 if st.session_state.get("provider") in FREE_TIER_PROVIDERS else 6
         try:
-            tcs, missing = generate_test_cases_in_batches(plan_ctx, tc_scenarios, batch_size=6)
+            tcs, missing = generate_test_cases_in_batches(plan_ctx, tc_scenarios, batch_size=batch_size)
         except Exception as e:
             handle_error(e); st.stop()
 
@@ -1796,7 +1873,8 @@ elif st.session_state.active_phase == 3:
         if st.button("🔄 Regenerate missing test cases", use_container_width=True, key="p3_repair"):
             try:
                 new_tcs, still_missing = generate_test_cases_in_batches(
-                    st.session_state.p3_plan_ctx, missing, batch_size=6
+                    st.session_state.p3_plan_ctx, missing,
+                    batch_size=3 if st.session_state.get("provider") in FREE_TIER_PROVIDERS else 6,
                 )
                 st.session_state.structured_test_cases = tc_data + new_tcs
                 st.session_state.p3_missing = still_missing
@@ -1844,13 +1922,14 @@ elif st.session_state.active_phase == 3:
         st.session_state.p3_chat_log.append({"role": "user", "content": reply3})
         with st.spinner("Updating…"):
             try:
-                current_tcs = json.dumps(tc_data, ensure_ascii=False)
+                current_tcs = json.dumps(compact_tcs_for_prompt(tc_data, reply3), ensure_ascii=False)
                 msg = (
-                    f"CURRENT TEST CASES (JSON):\n{current_tcs}\n\n"
-                    f"CONTEXT:\n{st.session_state.get('p3_plan_ctx', '')}\n\n"
+                    f"{st.session_state.get('lang_directive', '')}"
+                    f"CURRENT TEST CASES (JSON — compact view; full detail only for TCs you referenced):\n{current_tcs}\n\n"
+                    f"CONTEXT:\n{st.session_state.get('p3_plan_ctx', '')[:3000]}\n\n"
                     f"USER REQUEST:\n{reply3}"
                 )
-                ops = call_llm_json(PROMPT_P3_MODIFY, msg, max_tokens=8000)
+                ops = call_llm_json(PROMPT_P3_MODIFY, msg, max_tokens=6000)
                 changed = bool(ops.get("add") or ops.get("remove") or ops.get("modify"))
                 if changed:
                     st.session_state.structured_test_cases = apply_tc_ops(tc_data, ops)
