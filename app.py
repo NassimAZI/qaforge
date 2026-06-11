@@ -484,8 +484,8 @@ def coverage_gaps(rules, scenarios, review):
 # ── PROVIDER DEFAULTS ─────────────────────────────────────────────────────────
 PROVIDER_DEFAULTS = {
     "Gemini": {
-        "placeholder": "gemini-2.0-flash",
-        "examples": "`gemini-2.0-flash` · `gemini-2.5-flash-lite-preview-06-17` · `gemini-2.5-pro`",
+        "placeholder": "gemini-2.5-flash-lite",
+        "examples": "`gemini-2.5-flash-lite` (best free quota) · `gemini-2.5-flash` · ⚠️ `gemini-2.0-flash` is deprecated (free quota = 0)",
         "docs": "https://ai.google.dev/gemini-api/docs/models",
         "base_url": None,
     },
@@ -1229,7 +1229,27 @@ def file_icon(f):
 def handle_error(e):
     err = str(e)
     if "429" in err or "RESOURCE_EXHAUSTED" in err or "rate_limit" in err.lower():
-        st.error("⚠️ Quota/rate limit reached. Wait a moment or switch model.")
+        low = err.lower()
+        # Quota literally ZERO → the model has no free quota at all (deprecated /
+        # removed from the free tier, e.g. gemini-2.0-flash since March 2026).
+        # Waiting will NEVER fix this — switching model is the only solution.
+        if re.search(r"limit[:\s]+0\b", low) or "quota_value: 0" in low or '"limit": 0' in low:
+            st.error(
+                "🚫 **This model has NO free quota** (deprecated or removed from the "
+                "free tier) — waiting will not help. Switch model: `gemini-2.5-flash-lite` "
+                "has the most generous free quota."
+            )
+        elif re.search(r"per day|daily|rpd|requests today", low):
+            st.error(
+                "⚠️ **Daily quota exhausted** for this model/provider. It resets in "
+                "≤24h — switch model or provider to continue now."
+            )
+        else:
+            m = re.search(r"(?:try again|retry)[^\d]{0,20}([\d.]+)\s*s", err, re.IGNORECASE)
+            hint = f" The provider asks to wait ~{float(m.group(1)):.0f}s." if m else ""
+            st.error(f"⚠️ Per-minute rate limit reached.{hint} Wait a moment or switch model.")
+        with st.expander("🔎 Provider error detail"):
+            st.code(err[:600])
     elif "404" in err or "NOT_FOUND" in err or "model_not_found" in err.lower():
         st.error(f"⚠️ Model not found: **{st.session_state.model_choice}**. Check the docs: {PROVIDER_DEFAULTS[st.session_state.provider]['docs']}")
     elif "401" in err or "invalid_api_key" in err.lower() or "API_KEY" in err:

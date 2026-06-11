@@ -1,7 +1,8 @@
-
-># 🧪 QAForge — AI Test Case Generator
-**Version 0.6** 
+> # 🧪 QAForge — AI Test Case Generator
+>
+> **Version 0.6**
 > **QAForge** is a web application that automatically generates professional, structured QA test cases from a user story or feature description, using AI.
+
 ---
 
 ## ✨ Features
@@ -29,21 +30,27 @@
 ## 🗺️ The 3 Phases
 
 ### Phase 1 — Analysis & Clarification
+
 The AI analyzes the User Story and:
+
 1. Identifies **applicable test design techniques** (ISO 29119-4 specification-based + experience-based) before generating anything
 2. Generates **typed clarifying questions** (boolean / multiple_choice / text) grouped by category (Functional, Validation, Error Handling, Edge Cases, System Dependencies)
 3. Displays an analysis panel: numbered business rules (BR-1, BR-2…), actors, identified screens, techniques with rationale
 4. The clarification chat **applies corrections to the analysis** (summary, business rules, new questions) — corrections actually reach Phase 2, and the chat transcript is injected into the Phase 2 context
 
 ### Phase 2 — Test Checklist
+
 The AI generates a test checklist per technique:
+
 - Each scenario is prefixed by its technique: `BVA —`, `DT —`, `ST —`, `EP —`, `FC —`, `EG —`, `ET —`
 - Each scenario declares the business rules it covers (`covers: BR-1, BR-3`) — a **coverage panel** flags any rule not covered by a selected scenario
 - Per-scenario validation ✅ / rejection ❌ / priority adjustment
 - Chat modifications are applied as a **diff** (add / remove / modify) — your review state is preserved across iterations
 
 ### Phase 3 — Full Test Cases & Export
+
 The AI writes execution-ready test cases **directly as structured JSON** (batches of 6, completeness verified per pre-assigned TC id — missing scenarios are retried, then surfaced with a targeted "regenerate missing" repair):
+
 - **Technique** field (test design traceability)
 - Real test data in steps
 - Expected result in natural language
@@ -99,25 +106,25 @@ flowchart TD
 
 Each phase owns ONE canonical structured object. The UI and all exports are **derived** from it; every mutation goes through the same tested merge functions.
 
-| Phase | Source of truth (session state) | Mutated by | Derived from it |
-|---|---|---|---|
-| 1 | `p1_summary`, `p1_business_rules` (BR-x), `p1_questions`, `p1_answers`, `p1_iso_techniques` | Initial analysis · chat ops (`PROMPT_P1_CHAT`) · human answers | Phase 2 context (`p1_context`) |
-| 2 | `p2_scenarios` (+ `covers`) and `p2_review` (✅/❌ + priority per id) | Initial generation · chat diff (`apply_scenario_ops`) · AI self-review (same merge) | Coverage-gap panel · overlap flags · validated plan with pre-assigned `TC-n` ids |
-| 3 | `structured_test_cases` (JSON list) | Batch generation · targeted repair of missing ids · chat diff (`apply_tc_ops`) | On-screen Markdown (`tc_to_markdown`) · MD/TXT/JSON/CSV exports (`build_csv`) |
+| Phase | Source of truth (session state)                                                             | Mutated by                                                                          | Derived from it                                                                  |
+| ----- | ------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| 1     | `p1_summary`, `p1_business_rules` (BR-x), `p1_questions`, `p1_answers`, `p1_iso_techniques` | Initial analysis · chat ops (`PROMPT_P1_CHAT`) · human answers                      | Phase 2 context (`p1_context`)                                                   |
+| 2     | `p2_scenarios` (+ `covers`) and `p2_review` (✅/❌ + priority per id)                       | Initial generation · chat diff (`apply_scenario_ops`) · AI self-review (same merge) | Coverage-gap panel · overlap flags · validated plan with pre-assigned `TC-n` ids |
+| 3     | `structured_test_cases` (JSON list)                                                         | Batch generation · targeted repair of missing ids · chat diff (`apply_tc_ops`)      | On-screen Markdown (`tc_to_markdown`) · MD/TXT/JSON/CSV exports (`build_csv`)    |
 
 Phase transitions enforce coherence: re-validating Phase 1 **regenerates Phase 2 and resets Phase 3**; validating Phase 2 resets the Phase 3 chat. `phase_reached` never goes backwards (tabs stay unlocked).
 
 ### Prompt map
 
-| Prompt | Called when | Output contract | Applied by |
-|---|---|---|---|
-| `PROMPT_P1_QUESTIONS` | User Story submitted | JSON: `analysis` (reasoning scratchpad, discarded) → summary, techniques, `key_business_rules` (BR-x), actors, screens, typed questions | direct state assignment |
-| `PROMPT_P1_CHAT` | Phase 1 chat message | JSON: `reply` + optional `updated_summary` / `updated_business_rules` / `new_questions` (plain-text fallback) | state update |
-| `PROMPT_P2` (+ `PROMPT_P2_FEWSHOT` for Groq/Mistral/OpenRouter only) | Phase 1 validated | JSON: summary, scenarios (`covers`), `coverage_check` (self-verification, ordered AFTER scenarios on purpose), `potential_overlaps` | `normalize_scenarios` |
-| `PROMPT_P2_MODIFY` | Phase 2 chat message | JSON diff: `reply` + `add` / `remove` / `modify` — ambiguous request ⇒ clarifying question, empty ops | `apply_scenario_ops` |
-| `PROMPT_P2_REVIEW` | "AI self-review" button | Same diff contract — the model critiques its own plan (coverage, duplicates, title quality) | `apply_scenario_ops` |
-| `PROMPT_P3_GEN` | Phase 2 validated (per batch of 6) | JSON: `test_cases` keeping exact `id`/`title`/`priority`/`covers`, optional per-step `expected` | completeness check by id |
-| `PROMPT_P3_MODIFY` | Phase 3 chat message | JSON diff: `reply` + `add` / `remove` / `modify` — pure questions ⇒ empty ops | `apply_tc_ops` |
+| Prompt                                                               | Called when                        | Output contract                                                                                                                         | Applied by               |
+| -------------------------------------------------------------------- | ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- | ------------------------ |
+| `PROMPT_P1_QUESTIONS`                                                | User Story submitted               | JSON: `analysis` (reasoning scratchpad, discarded) → summary, techniques, `key_business_rules` (BR-x), actors, screens, typed questions | direct state assignment  |
+| `PROMPT_P1_CHAT`                                                     | Phase 1 chat message               | JSON: `reply` + optional `updated_summary` / `updated_business_rules` / `new_questions` (plain-text fallback)                           | state update             |
+| `PROMPT_P2` (+ `PROMPT_P2_FEWSHOT` for Groq/Mistral/OpenRouter only) | Phase 1 validated                  | JSON: summary, scenarios (`covers`), `coverage_check` (self-verification, ordered AFTER scenarios on purpose), `potential_overlaps`     | `normalize_scenarios`    |
+| `PROMPT_P2_MODIFY`                                                   | Phase 2 chat message               | JSON diff: `reply` + `add` / `remove` / `modify` — ambiguous request ⇒ clarifying question, empty ops                                   | `apply_scenario_ops`     |
+| `PROMPT_P2_REVIEW`                                                   | "AI self-review" button            | Same diff contract — the model critiques its own plan (coverage, duplicates, title quality)                                             | `apply_scenario_ops`     |
+| `PROMPT_P3_GEN`                                                      | Phase 2 validated (per batch of 6) | JSON: `test_cases` keeping exact `id`/`title`/`priority`/`covers`, optional per-step `expected`                                         | completeness check by id |
+| `PROMPT_P3_MODIFY`                                                   | Phase 3 chat message               | JSON diff: `reply` + `add` / `remove` / `modify` — pure questions ⇒ empty ops                                                           | `apply_tc_ops`           |
 
 ### LLM call pipeline
 
@@ -150,7 +157,7 @@ pip install -r requirements.txt
 Or manually:
 
 ```bash
-pip install streamlit google-genai openai pymupdf python-docx Pillow pypdf langdetect
+pip install -r requirements.txt   # versions are PINNED for reproducible deploys
 ```
 
 ### Run the app
@@ -165,22 +172,22 @@ streamlit run app.py
 
 In the **sidebar**:
 
-| Parameter | Description |
-|---|---|
-| **LLM Provider** | Gemini · OpenAI · Groq · Mistral · OpenRouter |
-| **API Key** | API key for the selected provider |
-| **Model** | Exact model ID (e.g. `gemini-2.0-flash`, `gpt-4o-mini`) |
+| Parameter          | Description                                                                                            |
+| ------------------ | ------------------------------------------------------------------------------------------------------ |
+| **LLM Provider**   | Gemini · OpenAI · Groq · Mistral · OpenRouter                                                          |
+| **API Key**        | API key for the selected provider                                                                      |
+| **Model**          | Exact model ID (e.g. `gemini-2.5-flash-lite`, `gpt-4o-mini`)                                           |
 | **🌡️ Temperature** | `0.0` = reproducible (ISO 29119-4) · `0.2` = balanced default · `>0.5` = creative but less stable JSON |
 
 ### Recommended models
 
-| Provider | Recommended model | Notes |
-|---|---|---|
-| Gemini | `gemini-2.0-flash` | Best quality/speed ratio, native vision |
-| OpenAI | `gpt-4o-mini` | Cost-efficient, reliable structured JSON |
-| Groq | `llama-3.3-70b-versatile` | Very fast, free tier available |
-| Mistral | `mistral-small-latest` | Good European alternative |
-| OpenRouter | `meta-llama/llama-3.3-70b-instruct:free` | Free |
+| Provider   | Recommended model                        | Notes                                                                                                                   |
+| ---------- | ---------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| Gemini     | `gemini-2.5-flash-lite`                  | Most generous free quota (~15 RPM / 1000 RPD), native vision. ⚠️ `gemini-2.0-flash` is deprecated — its free quota is 0 |
+| OpenAI     | `gpt-4o-mini`                            | Cost-efficient, reliable structured JSON                                                                                |
+| Groq       | `llama-3.3-70b-versatile`                | Very fast, free tier available                                                                                          |
+| Mistral    | `mistral-small-latest`                   | Good European alternative                                                                                               |
+| OpenRouter | `meta-llama/llama-3.3-70b-instruct:free` | Free but ~50 requests/day and shared capacity — 429 errors can occur even on a first request                            |
 
 ---
 
@@ -194,16 +201,16 @@ Before asking any clarifying question, the AI identifies which techniques apply 
 
 ### Supported techniques
 
-| Prefix | Technique | Family | When applied |
-|---|---|---|---|
-| `BVA` | Boundary Value Analysis | ISO 29119-4 specification-based | Numeric fields, ranges, limits |
-| `DT` | Decision Table Testing | ISO 29119-4 specification-based | Multi-condition logic (pairwise preferred when 3+ conditions interact) |
-| `ST` | State Transition Testing | ISO 29119-4 specification-based | Lifecycles, statuses (draft/active/archived) |
-| `EP` | Equivalence Partitioning | ISO 29119-4 specification-based | Valid/invalid input classes |
-| `EG` | Error Guessing | ISO 29119-4 experience-based | Likely failure points from experience |
-| `ET` | Exploratory Testing | Experience-based **practice** (ISTQB — not a 29119-4 design technique) | Unexpected user paths, free-form exploration |
-| `FC` | Function Combinations | Combinatorial (feature interactions) | Interactions between features/modules |
-| _(none)_ | Happy Path / Alternate Flow | — | Nominal user journeys |
+| Prefix   | Technique                   | Family                                                                 | When applied                                                           |
+| -------- | --------------------------- | ---------------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| `BVA`    | Boundary Value Analysis     | ISO 29119-4 specification-based                                        | Numeric fields, ranges, limits                                         |
+| `DT`     | Decision Table Testing      | ISO 29119-4 specification-based                                        | Multi-condition logic (pairwise preferred when 3+ conditions interact) |
+| `ST`     | State Transition Testing    | ISO 29119-4 specification-based                                        | Lifecycles, statuses (draft/active/archived)                           |
+| `EP`     | Equivalence Partitioning    | ISO 29119-4 specification-based                                        | Valid/invalid input classes                                            |
+| `EG`     | Error Guessing              | ISO 29119-4 experience-based                                           | Likely failure points from experience                                  |
+| `ET`     | Exploratory Testing         | Experience-based **practice** (ISTQB — not a 29119-4 design technique) | Unexpected user paths, free-form exploration                           |
+| `FC`     | Function Combinations       | Combinatorial (feature interactions)                                   | Interactions between features/modules                                  |
+| _(none)_ | Happy Path / Alternate Flow | —                                                                      | Nominal user journeys                                                  |
 
 ### Coverage traceability
 
@@ -217,12 +224,12 @@ These techniques are designed to maximise **test coverage (recall)**. This means
 
 ## 📁 Supported file formats
 
-| Format | Text extraction | Image extraction | Notes |
-|---|---|---|---|
-| PDF | ✅ PyMuPDF | ✅ (positional order) | Fallback to pypdf if PyMuPDF unavailable · Scanned pages rasterized |
-| DOCX | ✅ paragraphs + tables | ✅ inline images | Tables converted to Markdown |
-| TXT / MD | ✅ | ❌ | Plain text |
-| PNG / JPG / WEBP | — | ✅ direct | Visual analysis (Gemini / OpenAI only) |
+| Format           | Text extraction        | Image extraction      | Notes                                                               |
+| ---------------- | ---------------------- | --------------------- | ------------------------------------------------------------------- |
+| PDF              | ✅ PyMuPDF             | ✅ (positional order) | Fallback to pypdf if PyMuPDF unavailable · Scanned pages rasterized |
+| DOCX             | ✅ paragraphs + tables | ✅ inline images      | Tables converted to Markdown                                        |
+| TXT / MD         | ✅                     | ❌                    | Plain text                                                          |
+| PNG / JPG / WEBP | —                      | ✅ direct             | Visual analysis (Gemini / OpenAI only)                              |
 
 > **Limits**: 5 files max · Max 80,000 chars per file · Images smaller than 50×50px filtered out · Images resized to max 1024px before API call
 
@@ -230,11 +237,11 @@ These techniques are designed to maximise **test coverage (recall)**. This means
 
 ## 📤 Exports
 
-| Format | Content |
-|---|---|
-| **Markdown** | Formatted test cases with tables, numbered steps, expected results (derived from JSON) |
-| **JSON** | Structured array (source of truth): `id`, `title`, `technique`, `type`, `priority`, `automation`, `preconditions`, `steps`, `expected_result`, `failure_signature` |
-| **CSV** | Excel / Google Sheets / Jira compatible — formula-injection safe, includes `covers` (BR-x traceability) and per-step expected results |
+| Format       | Content                                                                                                                                                            |
+| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Markdown** | Formatted test cases with tables, numbered steps, expected results (derived from JSON)                                                                             |
+| **JSON**     | Structured array (source of truth): `id`, `title`, `technique`, `type`, `priority`, `automation`, `preconditions`, `steps`, `expected_result`, `failure_signature` |
+| **CSV**      | Excel / Google Sheets / Jira compatible — formula-injection safe, includes `covers` (BR-x traceability) and per-step expected results                              |
 
 ---
 
@@ -292,5 +299,6 @@ All user-visible tooltip strings are stored in the `HELP_TEXTS` dictionary, plac
 - **Groq, Mistral, OpenRouter** do not support image analysis — `[IMAGE_N]` markers remain in text but are not visually processed
 - **Mistral Small** context window (~32k tokens) limits effective document size to ~25,000 chars
 - `localStorage` is disabled in Streamlit Cloud iframes — session is lost on page reload
+- Streamlit Cloud builds can fail on transient PyPI timeouts (`ReadTimeoutError ... /simple/<pkg>/` then a misleading `ResolutionImpossible`) — reboot the app; pinned requirements keep the resolver from backtracking
 
 ---
