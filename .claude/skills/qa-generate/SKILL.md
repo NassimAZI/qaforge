@@ -95,6 +95,13 @@ After generating all test cases, produce a summary block:
 3. For any modification: apply only the requested changes — do not regenerate untouched test cases
 4. For exports: offer Markdown, CSV, or JSON format depending on the user's toolchain
 
+## Session Recovery in Phase 3
+
+If the conversation context has been lost after test cases were already generated:
+- Ask the user to paste their test cases (Markdown table or JSON)
+- Resume directly from that state — allow modifications, deletions, additions, and exports
+- Do NOT regenerate test cases from scratch unless the user explicitly asks for it
+
 ## Supported Commands in Phase 3
 
 - "Edit TC-3" → modify only that test case
