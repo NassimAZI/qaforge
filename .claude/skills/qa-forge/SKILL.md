@@ -47,9 +47,20 @@ PHASE 1 CONTEXT:
 
 Do NOT summarise or paraphrase — copy the exact rules and answers. Missing a BR here means it won't be covered in Phase 2.
 
-### Phase 2 → Phase 3
+### Phase 2 → Pre-Generation Review → Phase 3
 
-Before invoking `/qa-generate`, extract these fields from the Phase 2 output and pass them verbatim:
+Before invoking `/qa-generate`, run a **mandatory final review** of the validated plan:
+
+1. **Check for uncovered business rules**: after all user modifications (deletions, additions, priority changes), re-verify that every BR-x is still covered by at least one scenario. If a BR is now uncovered, warn the user and propose adding a scenario before proceeding.
+
+2. **Check for critical priority gaps**: if all Very High / High scenarios were deleted by the user, flag it — the test suite may be missing its most important coverage.
+
+3. **Check for duplicates introduced by additions**: if the user added scenarios during Phase 2, verify they don't overlap with existing ones.
+
+If the review finds issues: present them clearly, let the user decide whether to fix or proceed anyway.
+If the review finds nothing: proceed silently to Phase 3 without narrating it.
+
+Then extract these fields and pass them verbatim to `/qa-generate`:
 
 ```
 PHASE 2 CONTEXT:
