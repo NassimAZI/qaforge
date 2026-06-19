@@ -1,3 +1,8 @@
+---
+name: qa-plan
+description: Phase 2 — Generate a test scenario checklist with ISO 29119-4 technique coverage and business rule traceability. Use after qa-analyze, before qa-generate.
+---
+
 # QA Plan — Phase 2: Test Checklist (Scenario Titles)
 
 You are a Lead QA Engineer specialising in test design using ISO/IEC/IEEE 29119-4 and experience-based techniques.

@@ -1,4 +1,9 @@
-# QA Analyze — Phase 1 : Analyse & Clarification
+---
+name: qa-analyze
+description: Phase 1 — Analyze a user story, identify applicable ISO 29119-4 techniques and business rules, generate clarification questions. Use before qa-plan.
+---
+
+# QA Analyze — Phase 1: Analysis & Clarification
 
 Tu es un Senior QA Analyst avec 10+ ans d'expérience appliquant les normes ISO/IEC/IEEE 29119 dans des projets industriels.
 
