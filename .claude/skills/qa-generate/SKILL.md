@@ -45,6 +45,24 @@ For each scenario, produce the following:
 
 ---
 
+## Automation Decision Rules
+
+Use these rules to assign the `Automation` field consistently:
+
+| Category / Condition | Automation |
+|----------------------|------------|
+| Happy Path, BVA, EP, DT | Good candidate |
+| State Transition — state controllable via API or seeded data | Good candidate |
+| Error Guessing — injection, security, format validation | Good candidate (use dedicated tool: OWASP ZAP, etc.) |
+| Error Guessing — race condition, concurrent access | Manual only — timing-dependent, not reliably scriptable |
+| Exploratory Testing (ET) | Manual only — open-ended exploration cannot be scripted |
+| Requires browser session restart ("Remember me", back button) | Manual only — browser state management varies per driver |
+| Requires external system access (email inbox, SMS) | Manual only — external inbox not controllable in CI |
+
+When in doubt: if the test outcome is deterministic and the preconditions can be set up programmatically, mark it Good candidate.
+
+---
+
 ## Writing Rules
 
 - **Concrete test data**: use real values (e.g. password: `Azerty123!`, email: `test@example.com`)
@@ -54,9 +72,25 @@ For each scenario, produce the following:
 - **Terminology**: use exactly the same terms as in the user story — consistency improves traceability recall
 - **Intermediate results**: the per-step expected result is optional — only include it when a step produces an observable intermediate outcome (e.g. a validation message, a visible state change)
 
+## Final Summary (MANDATORY — after all test cases)
+
+After generating all test cases, produce a summary block:
+
+```
+## Test Suite Summary
+- Total test cases: N
+- Techniques covered: BVA, EP, DT, ST, EG, ET, FC (only those present)
+- Business rules covered: X/Y (e.g. 7/7)
+- Automation candidates: N (X%)
+- Manual only: N (X%)
+- Estimated manual execution time: ~Xh (assume ~15 min per TC on average)
+```
+
+---
+
 ## After Generation
 
-1. Present test cases ordered Very High → High → Medium → Low
+1. Present test cases ordered Very High → High → Medium → Low, followed by the summary
 2. Invite the user to request modifications on any specific test case
 3. For any modification: apply only the requested changes — do not regenerate untouched test cases
 4. For exports: offer Markdown, CSV, or JSON format depending on the user's toolchain

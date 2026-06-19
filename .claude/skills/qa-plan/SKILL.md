@@ -96,11 +96,24 @@ Keep the N most critical scenarios (highest priority + broadest rule coverage) a
 - Assign realistic priorities based on business impact.
 - Write all text fields in the SAME LANGUAGE as the user story.
 
+## Automatic Self-Review (MANDATORY — run before presenting the plan)
+
+Before showing the plan to the user, run a silent self-review pass on your own output:
+
+1. **Coverage**: is any business rule weakly covered (only 1 scenario) or uncovered? Any obvious risk (security, concurrency, data validation) with no scenario?
+2. **Duplicates**: do any scenarios test essentially the same thing? Remove or merge the weaker one.
+3. **Quality**: are titles concrete and testable (exact values, conditions, states)? Are priorities realistic given business impact?
+
+Apply only the operations that genuinely improve the plan. If the plan is already solid, proceed without changes. Do NOT inflate the scenario count.
+
+Present the final plan (post self-review) to the user — no need to narrate the review process unless you made changes.
+
+---
+
 ## After Presenting the Plan
 
 1. Wait for the user to validate, modify, or reject scenarios
 2. Apply modifications as a **diff only** — add/remove/modify the targeted scenarios; untouched scenarios must not be regenerated or altered
 3. For a COUNT request ("keep only 8"): treat as a REMOVE operation — list the ids to remove, keep the most critical ones, verify: current count − removed = requested count
 4. For ambiguous requests (e.g. "improve the plan"): ask a clarifying question — do NOT guess
-5. Optionally propose a **self-review pass**: re-examine the plan for weak coverage, duplicates, and unrealistic priorities, and apply only the operations that genuinely improve it
-6. When the plan is validated: **"✅ Phase 2 complete. You can move on to Phase 3 (Test Case Generation)."**
+5. When the plan is validated: **"✅ Phase 2 complete. You can move on to Phase 3 (Test Case Generation)."**
