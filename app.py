@@ -1019,46 +1019,60 @@ hr { border-color: var(--border) !important; margin: 12px 0 !important; }
 # ── UI HELPERS ───────────────────────────────────────────────────────────────
 
 def render_stepper():
-    """Graduation-ruler stepper — shows current phase position."""
+    """Graduation-ruler stepper rendered via components.html (bypass Streamlit sanitizer)."""
     phase = st.session_state.get("active_phase", 1)
     reached = st.session_state.get("phase_reached", 1)
 
-    def _rail_cls(p):
-        if phase > p or (reached > p): return "done"
+    def _cls(p):
+        if phase > p or reached > p: return "done"
         if phase == p: return "active"
         return ""
 
-    def _node_cls(p):
-        if phase > p or (reached > p): return "done"
-        if phase == p: return "active"
-        return ""
+    steps = [
+        (1, "01 · Analysis"),
+        (2, "02 · Plan"),
+        (3, "03 · Test Cases"),
+    ]
 
-    def _lbl_cls(p):
-        if phase > p or (reached > p): return "done"
-        if phase == p: return "active"
-        return ""
-
-    def _seg(p, label):
-        rc = _rail_cls(p); nc = _node_cls(p); lc = _lbl_cls(p)
-        parts = []
+    segs = []
+    for p, label in steps:
+        c = _cls(p)
+        ticks = ""
         for i in range(5):
             maj = " major" if i in (0, 4) else ""
-            parts.append(f'<div class="qf-tick{maj} {rc}" style="left:{i*25}%;"></div>')
-        t = "".join(parts)
-        return f"""
-        <div class="qf-step">
-          <div class="qf-step-rail {rc}">{t}</div>
-          <div class="qf-node {nc}"></div>
-          <div class="qf-step-label {lc}">{label}</div>
-        </div>"""
+            ticks += f'<div class="qf-tick{maj} {c}" style="left:{i*25}%"></div>'
+        segs.append(f"""
+          <div class="qf-step">
+            <div class="qf-step-rail {c}">{ticks}</div>
+            <div class="qf-node {c}"></div>
+            <div class="qf-step-label {c}">{label}</div>
+          </div>""")
 
-    html = f"""
-    <div class="qf-stepper">
-      {_seg(1, "01 · Analysis")}
-      {_seg(2, "02 · Plan")}
-      {_seg(3, "03 · Test Cases")}
-    </div>"""
-    st.markdown(html, unsafe_allow_html=True)
+    html = """
+    <style>
+    @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&display=swap');
+    body { margin: 0; background: transparent; }
+    .qf-stepper { display:flex; align-items:flex-start; padding:20px 0 8px; gap:0; }
+    .qf-step { flex:1; display:flex; flex-direction:column; align-items:flex-start; position:relative; }
+    .qf-step-rail { width:100%; height:3px; background:#21262d; position:relative; border-radius:2px; }
+    .qf-step-rail.done  { background:#10b981; box-shadow:0 0 5px rgba(16,185,129,0.4); }
+    .qf-step-rail.active{ background:#3b82f6; box-shadow:0 0 6px rgba(59,130,246,0.5); }
+    .qf-tick { position:absolute; top:-5px; width:1px; height:12px; background:#21262d; }
+    .qf-tick.major { height:18px; top:-8px; width:2px; }
+    .qf-tick.done  { background:#10b981; }
+    .qf-tick.active{ background:#3b82f6; }
+    .qf-node { position:absolute; top:-5px; left:0; width:10px; height:10px; border-radius:50%;
+               background:#21262d; border:2px solid #21262d; transform:translateX(-50%); }
+    .qf-node.done  { background:#10b981; border-color:#10b981; box-shadow:0 0 6px #10b981; }
+    .qf-node.active{ background:#3b82f6; border-color:#3b82f6; box-shadow:0 0 8px #3b82f6; }
+    .qf-step-label { font-family:'JetBrains Mono',monospace; font-size:9px; letter-spacing:0.12em;
+                     text-transform:uppercase; color:#484f58; margin-top:14px; white-space:nowrap; }
+    .qf-step-label.done  { color:#10b981; }
+    .qf-step-label.active{ color:#3b82f6; }
+    </style>
+    <div class="qf-stepper">""" + "".join(segs) + "</div>"
+
+    components.html(html, height=60)
 
 
 def _prio_pill(priority: str) -> str:
