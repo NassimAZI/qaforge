@@ -4,7 +4,8 @@ Pure functions only (reference parsing, US formatting, client guards)."""
 import pytest
 
 from clickup_import import (
-    extract_task_ref,
+    extract_ref,
+    doc_pages_to_us_text,
     task_to_us_text,
     ClickUpClient,
     _retry_wait,
@@ -33,28 +34,28 @@ TASK = {
 
 class TestExtractTaskRef:
     def test_raw_native_id(self):
-        assert extract_task_ref("868c9q3zv") == {"task_id": "868c9q3zv", "team_id": None}
+        assert extract_ref("868c9q3zv") == {"kind": "task", "task_id": "868c9q3zv", "team_id": None}
 
     def test_simple_task_url(self):
-        ref = extract_task_ref("https://app.clickup.com/t/868c9q3zv")
-        assert ref == {"task_id": "868c9q3zv", "team_id": None}
+        ref = extract_ref("https://app.clickup.com/t/868c9q3zv")
+        assert ref == {"kind": "task", "task_id": "868c9q3zv", "team_id": None}
 
     def test_custom_id_url_with_team(self):
-        ref = extract_task_ref("https://app.clickup.com/t/9012/TRESO-142")
-        assert ref == {"task_id": "TRESO-142", "team_id": "9012"}
+        ref = extract_ref("https://app.clickup.com/t/9012/TRESO-142")
+        assert ref == {"kind": "task", "task_id": "TRESO-142", "team_id": "9012"}
 
     def test_bare_custom_id_rejected_with_hint(self):
         with pytest.raises(ValueError, match="task URL"):
-            extract_task_ref("TRESO-142")
+            extract_ref("TRESO-142")
 
     def test_garbage_url_and_empty(self):
         with pytest.raises(ValueError):
-            extract_task_ref("https://app.clickup.com/dashboard")
+            extract_ref("https://app.clickup.com/dashboard")
         with pytest.raises(ValueError):
-            extract_task_ref("   ")
+            extract_ref("   ")
 
     def test_whitespace_tolerated(self):
-        assert extract_task_ref("  868c9q3zv  ")["task_id"] == "868c9q3zv"
+        assert extract_ref("  868c9q3zv  ")["task_id"] == "868c9q3zv"
 
 
 class TestTaskToUsText:
@@ -91,3 +92,41 @@ class TestClientGuards:
         assert _retry_wait("5", 0) == 5.0
         assert _retry_wait("Wed, 21 Oct 2026 07:28:00 GMT", 1) == 20.0
         assert _retry_wait(None, 0) == 10.0
+
+
+class TestDocRefs:
+    """The production error: a Doc URL was pasted, not a task URL."""
+
+    def test_doc_url_with_page(self):
+        ref = extract_ref("https://app.clickup.com/90121871168/docs/2kxux7u0-512/2kxux7u0-32")
+        assert ref == {"kind": "doc", "workspace_id": "90121871168",
+                       "doc_id": "2kxux7u0-512", "page_id": "2kxux7u0-32"}
+
+    def test_doc_url_without_page(self):
+        ref = extract_ref("https://app.clickup.com/90121871168/docs/2kxux7u0-512")
+        assert ref["kind"] == "doc" and ref["page_id"] is None
+
+    def test_doc_url_malformed(self):
+        with pytest.raises(ValueError):
+            extract_ref("https://app.clickup.com/docs")
+
+
+class TestDocPagesToUsText:
+    def test_single_page(self):
+        txt = doc_pages_to_us_text({"name": "Spec dépôt facture", "content": "## AC\n- CDAR = Déposée"},
+                                   source_url="https://app.clickup.com/x/docs/y/z")
+        assert txt.startswith("[ClickUp Doc] https://app.clickup.com/x/docs/y/z")
+        assert "## Spec dépôt facture" in txt and "CDAR = Déposée" in txt
+
+    def test_nested_subpages_flattened(self):
+        pages = [{"name": "Parent", "content": "intro",
+                  "pages": [{"name": "Child", "content": "détail"}]}]
+        txt = doc_pages_to_us_text(pages)
+        assert "## Parent" in txt and "## Child" in txt and txt.index("Parent") < txt.index("Child")
+
+    def test_empty_doc_flagged(self):
+        assert "empty Doc" in doc_pages_to_us_text([])
+
+    def test_truncation(self):
+        txt = doc_pages_to_us_text({"name": "Big", "content": "x" * 30000})
+        assert len(txt) < 20000 and "truncated" in txt

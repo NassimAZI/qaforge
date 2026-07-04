@@ -1524,16 +1524,27 @@ if st.session_state.active_phase == 1:
                 st.text_input("ClickUp API token", key="clickup_token", type="password",
                               help="ClickUp → Settings → Apps → API Token (starts with 'pk_')")
             with cc2:
-                st.text_input("Task ID or URL", key="clickup_task_ref",
-                              placeholder="868c9q3zv or https://app.clickup.com/t/…")
+                st.text_input("Task or Doc — ID or URL", key="clickup_task_ref",
+                              placeholder="Task id/URL or Doc URL (…/docs/…)")
             if st.button("📥 Fetch task", key="clickup_fetch",
                          disabled=not (st.session_state.clickup_token and st.session_state.clickup_task_ref)):
                 try:
-                    ref = cui.extract_task_ref(st.session_state.clickup_task_ref)
-                    task = cui.ClickUpClient(st.session_state.clickup_token).get_task(**ref)
-                    st.session_state.us_input_text = cui.task_to_us_text(task)[:20000]
-                    st.success(f"✅ Task “{task.get('name', '?')}” loaded below — review it "
-                               "before analyzing.")
+                    ref = cui.extract_ref(st.session_state.clickup_task_ref)
+                    client = cui.ClickUpClient(st.session_state.clickup_token)
+                    if ref["kind"] == "task":
+                        task = client.get_task(ref["task_id"], ref["team_id"])
+                        st.session_state.us_input_text = cui.task_to_us_text(task)[:20000]
+                        loaded = task.get("name", "?")
+                    else:  # doc — single page if the URL points to one, else whole doc
+                        if ref["page_id"]:
+                            pages = client.get_doc_page(ref["workspace_id"],
+                                                        ref["doc_id"], ref["page_id"])
+                        else:
+                            pages = client.get_doc_pages(ref["workspace_id"], ref["doc_id"])
+                        st.session_state.us_input_text = cui.doc_pages_to_us_text(
+                            pages, st.session_state.clickup_task_ref)[:20000]
+                        loaded = "Doc " + ref["doc_id"]
+                    st.success(f"✅ “{loaded}” loaded below — review it before analyzing.")
                 except Exception as e:
                     st.error(f"ClickUp fetch failed: {e}")
 
