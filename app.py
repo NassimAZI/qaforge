@@ -153,8 +153,8 @@ def call_openai(history, system_prompt, user_message, images=None, max_tokens=30
     return text
 
 def call_llm(history, system_prompt, user_message, images=None, max_tokens=3000):
-    max_tokens = effective_max_tokens(max_tokens)
     """Unified entry point — routes to the right provider."""
+    max_tokens = effective_max_tokens(max_tokens)
     provider = st.session_state.provider
     if provider == "Gemini":
         return call_gemini(history, system_prompt, user_message, images, max_tokens)
@@ -689,6 +689,7 @@ section[data-testid="stMain"] { background: var(--ground) !important; }
 /* ── PROGRESS ── */
 [data-testid="stProgress"] > div { background: var(--border-2) !important; border-radius: 3px !important; }
 [data-testid="stProgress"] > div > div { background: var(--accent2) !important; border-radius: 3px !important; box-shadow: 0 0 6px var(--accent2) !important; }
+[data-testid="stProgress"] p { color: var(--text) !important; font-family: var(--mono) !important; font-size: 11px !important; }
 
 /* ── ALERTS / INFO / SUCCESS / WARNING ── */
 [data-testid="stAlert"] {
