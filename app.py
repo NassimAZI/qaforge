@@ -1092,15 +1092,15 @@ def _auto_pill(automation: str) -> str:
 
 
 def render_tc_cards(tcs: list):
-    """Render test cases as interactive accordion cards."""
+    """Render TC accordion cards via components.html so onclick JS is not stripped."""
     if not tcs:
         return
 
-    # priority order for display
+    import html as _html
+
     prio_order = {"very high": 0, "high": 1, "medium": 2, "low": 3}
     sorted_tcs = sorted(tcs, key=lambda t: prio_order.get((t.get("priority") or "").lower(), 9))
 
-    # counts for filter bar
     prio_counts = {"Very High": 0, "High": 0, "Medium": 0, "Low": 0}
     auto_count = 0
     for tc in sorted_tcs:
@@ -1110,94 +1110,160 @@ def render_tc_cards(tcs: list):
         if "good" in (tc.get("automation") or "").lower():
             auto_count += 1
 
-    filter_html = f"""
-    <div class="qf-filter-bar">
-      <span class="qf-filter-lbl">Filter</span>
-      <span class="qf-filter-chip">All ({len(sorted_tcs)})</span>
-      <span class="qf-filter-chip">🔴 Very High ({prio_counts['Very High']})</span>
-      <span class="qf-filter-chip">🟠 High ({prio_counts['High']})</span>
-      <span class="qf-filter-chip">🟡 Medium ({prio_counts['Medium']})</span>
-      <span class="qf-filter-chip">🟢 Low ({prio_counts['Low']})</span>
-      <span class="qf-filter-chip" style="margin-left:auto;">🤖 Automatable ({auto_count})</span>
-    </div>"""
-    st.markdown(filter_html, unsafe_allow_html=True)
+    def pill(text, cls=""):
+        return f'<span class="pill {cls}">{_html.escape(str(text))}</span>'
+
+    def prio_pill(p):
+        pl = (p or "").lower()
+        if "very" in pl: return pill(p, "prio-vh")
+        if pl == "high":   return pill(p, "prio-hi")
+        if pl == "medium": return pill(p, "prio-md")
+        if pl == "low":    return pill(p, "prio-lo")
+        return pill(p)
+
+    def auto_pill(a):
+        return pill("🤖 Auto", "auto") if "good" in (a or "").lower() else pill("✋ Manual", "manual")
 
     cards_html = []
     for tc in sorted_tcs:
-        tc_id    = tc.get("id", "TC-?")
-        title    = tc.get("title", "")
+        tc_id    = _html.escape(tc.get("id", "TC-?"))
+        title    = _html.escape(tc.get("title", ""))
         tech     = tc.get("technique", "")
         prio     = tc.get("priority", "")
         auto     = tc.get("automation", "")
         covers   = tc.get("covers") or []
         pre      = tc.get("preconditions") or []
         steps    = tc.get("steps") or []
-        expected = tc.get("expected_result", "")
-        failure  = tc.get("failure_signature", "")
+        expected = _html.escape(str(tc.get("expected_result", "") or ""))
+        failure  = _html.escape(str(tc.get("failure_signature", "") or ""))
 
-        pills = _prio_pill(prio)
+        pills_str = prio_pill(prio)
         if tech:
-            pills += f' <span class="qf-pill">{tech}</span>'
-        pills += " " + _auto_pill(auto)
-        if covers:
-            for br in covers:
-                pills += f' <span class="qf-pill">{br}</span>'
+            pills_str += pill(tech)
+        pills_str += auto_pill(auto)
+        for br in covers:
+            pills_str += pill(br, "br")
 
-        # preconditions
         if isinstance(pre, list):
-            pre_html = "".join(f"<div>— {p}</div>" for p in pre if str(p).strip())
+            pre_str = "".join(f"<div>— {_html.escape(str(p))}</div>" for p in pre if str(p).strip()) or "—"
         else:
-            pre_html = f"<div>{pre}</div>"
+            pre_str = _html.escape(str(pre)) or "—"
 
-        # steps table rows
         step_rows = ""
         for i, s in enumerate(steps):
             if isinstance(s, dict):
-                act = s.get("action", "")
-                exp = s.get("expected", "") or ""
+                act = _html.escape(str(s.get("action", "")))
+                exp = _html.escape(str(s.get("expected", "") or ""))
             else:
-                act = str(s)
+                act = _html.escape(str(s))
                 exp = ""
-            step_rows += f"""
-            <tr>
-              <td>{i+1}</td>
-              <td>{act}</td>
-              <td class="expected">{exp}</td>
-            </tr>"""
+            step_rows += f"<tr><td>{i+1}</td><td>{act}</td><td class='exp'>{exp}</td></tr>"
+        if not step_rows:
+            step_rows = "<tr><td colspan='3' style='color:#484f58;font-style:italic;'>No steps defined</td></tr>"
 
-        card = f"""
-        <div class="qf-tc-card">
-          <div class="qf-tc-head" onclick="this.closest('.qf-tc-card').querySelector('.qf-tc-body').style.display=this.closest('.qf-tc-card').querySelector('.qf-tc-body').style.display==='none'?'grid':'none';this.querySelector('.qf-chevron').style.transform=this.closest('.qf-tc-card').querySelector('.qf-tc-body').style.display==='grid'?'rotate(90deg)':'rotate(0deg)'">
-            <div class="qf-tc-id">{tc_id}</div>
-            <div class="qf-tc-title">{title}</div>
-            <div class="qf-tc-pills">{pills}</div>
-            <div class="qf-chevron">▶</div>
+        cards_html.append(f"""
+        <div class="card">
+          <div class="card-head" onclick="toggle(this)">
+            <span class="tc-id">{tc_id}</span>
+            <span class="tc-title">{title}</span>
+            <span class="pills">{pills_str}</span>
+            <span class="chev">▶</span>
           </div>
-          <div class="qf-tc-body" style="display:none;">
-            <div>
-              <div class="qf-sec-label">Preconditions</div>
-              <div style="font-size:12px;color:var(--text-muted);line-height:1.7;">{pre_html if pre_html else '—'}</div>
+          <div class="card-body">
+            <div class="sect">
+              <div class="sect-lbl">Preconditions</div>
+              <div class="pre-text">{pre_str}</div>
             </div>
-            <div>
-              <div class="qf-sec-label">Expected Result</div>
-              <div class="qf-result-box">{expected or '—'}</div>
+            <div class="sect">
+              <div class="sect-lbl">Expected Result</div>
+              <div class="result-box">{expected or "—"}</div>
             </div>
-            <div class="full">
-              <div class="qf-sec-label">Steps</div>
-              <table class="qf-steps-table">
-                <thead><tr><th>#</th><th>Action</th><th>Intermediate Expected</th></tr></thead>
-                <tbody>{step_rows if step_rows else '<tr><td colspan="3" style="color:var(--text-dim);font-style:italic;">No steps defined</td></tr>'}</tbody>
-              </table>
+            <div class="sect full">
+              <div class="sect-lbl">Steps</div>
+              <table><thead><tr><th>#</th><th>Action</th><th>Intermediate Expected</th></tr></thead>
+              <tbody>{step_rows}</tbody></table>
             </div>
-            <div class="full">
-              <div class="qf-sec-label">Failure Signature</div>
-              <div class="qf-failure-box">{failure or '—'}</div>
+            <div class="sect full">
+              <div class="sect-lbl">Failure Signature</div>
+              <div class="fail-box">{failure or "—"}</div>
             </div>
           </div>
-        </div>"""
-        cards_html.append(card)
+        </div>""")
 
-    st.markdown("\n".join(cards_html), unsafe_allow_html=True)
+    filter_bar = (
+        f'<div class="filter-bar">'
+        f'<span class="flbl">Filter</span>'
+        f'<span class="fchip">All ({len(sorted_tcs)})</span>'
+        f'<span class="fchip">🔴 VH ({prio_counts["Very High"]})</span>'
+        f'<span class="fchip">🟠 Hi ({prio_counts["High"]})</span>'
+        f'<span class="fchip">🟡 Md ({prio_counts["Medium"]})</span>'
+        f'<span class="fchip">🟢 Lo ({prio_counts["Low"]})</span>'
+        f'<span class="fchip" style="margin-left:auto">🤖 Auto ({auto_count})</span>'
+        f'</div>'
+    )
+
+    # Height: 44px per card header + 400px per open body (all closed by default)
+    # We give enough room for all headers + a comfortable scroll
+    estimated_h = len(sorted_tcs) * 50 + 60
+    max_h = min(estimated_h, 1800)
+
+    full_html = f"""<!DOCTYPE html><html><head><meta charset="utf-8">
+<style>
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Inter:wght@400;500&display=swap');
+*{{box-sizing:border-box;margin:0;padding:0}}
+body{{background:#0d1117;color:#e6edf3;font-family:'Inter',sans-serif;font-size:13px;padding:4px 0}}
+.filter-bar{{display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding:4px 0 10px}}
+.flbl{{font-family:'JetBrains Mono',monospace;font-size:9px;text-transform:uppercase;letter-spacing:.12em;color:#484f58;margin-right:4px}}
+.fchip{{font-family:'JetBrains Mono',monospace;font-size:10px;padding:3px 8px;border-radius:5px;border:1px solid #30363d;color:#8b949e;cursor:default}}
+.card{{background:#161b22;border:1px solid #21262d;border-radius:10px;margin-bottom:6px;overflow:hidden;transition:border-color .14s}}
+.card:hover{{border-color:#30363d}}
+.card-head{{display:flex;align-items:center;gap:10px;padding:11px 14px;cursor:pointer;user-select:none}}
+.tc-id{{font-family:'JetBrains Mono',monospace;font-size:11px;font-weight:600;color:#3b82f6;min-width:42px;flex-shrink:0}}
+.tc-title{{flex:1;font-size:13px;font-weight:500;color:#e6edf3}}
+.pills{{display:flex;gap:4px;flex-wrap:wrap;flex-shrink:0}}
+.pill{{font-family:'JetBrains Mono',monospace;font-size:9px;padding:2px 7px;border-radius:999px;border:1px solid #30363d;color:#8b949e;white-space:nowrap}}
+.pill.prio-vh{{border-color:#ef4444;color:#ef4444;background:rgba(239,68,68,.07)}}
+.pill.prio-hi{{border-color:#f59e0b;color:#f59e0b;background:rgba(245,158,11,.07)}}
+.pill.prio-md{{border-color:#3b82f6;color:#3b82f6;background:rgba(59,130,246,.1)}}
+.pill.prio-lo{{border-color:#10b981;color:#10b981;background:rgba(16,185,129,.1)}}
+.pill.auto{{border-color:#10b981;color:#10b981;background:rgba(16,185,129,.1)}}
+.pill.manual{{border-color:#30363d;color:#484f58}}
+.pill.br{{border-color:#30363d;color:#8b949e}}
+.chev{{font-size:9px;color:#484f58;transition:transform .2s;flex-shrink:0}}
+.card-body{{display:none;border-top:1px solid #21262d;padding:16px;grid-template-columns:1fr 1fr;gap:16px}}
+.card-body.open{{display:grid}}
+.sect{{display:flex;flex-direction:column;gap:6px}}
+.sect.full{{grid-column:1/-1}}
+.sect-lbl{{font-family:'JetBrains Mono',monospace;font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:#484f58}}
+.pre-text{{font-size:12px;color:#8b949e;line-height:1.7}}
+.result-box{{background:#0d1117;border:1px solid #21262d;border-radius:6px;padding:10px 12px;font-size:12px;color:#8b949e;line-height:1.6}}
+.fail-box{{background:rgba(239,68,68,.05);border:1px solid rgba(239,68,68,.18);border-radius:6px;padding:10px 12px;font-size:11px;font-family:'JetBrains Mono',monospace;color:rgba(239,68,68,.75);line-height:1.6}}
+table{{width:100%;border-collapse:collapse;font-size:12px}}
+th{{font-family:'JetBrains Mono',monospace;font-size:9px;text-transform:uppercase;letter-spacing:.1em;color:#484f58;text-align:left;padding:0 8px 6px 0;border-bottom:1px solid #21262d}}
+td{{padding:6px 8px 6px 0;border-bottom:1px solid #21262d;vertical-align:top;color:#e6edf3;line-height:1.5}}
+td:first-child{{font-family:'JetBrains Mono',monospace;font-size:10px;color:#484f58;width:24px}}
+td.exp{{color:#8b949e;font-style:italic}}
+tr:last-child td{{border-bottom:none}}
+</style></head><body>
+{filter_bar}
+{"".join(cards_html)}
+<script>
+function toggle(head){{
+  var body=head.nextElementSibling;
+  var chev=head.querySelector('.chev');
+  var open=body.classList.toggle('open');
+  chev.style.transform=open?'rotate(90deg)':'rotate(0deg)';
+  // notify parent iframe of new height
+  window.parent.postMessage({{type:'qf-resize',h:document.body.scrollHeight+20}},'*');
+}}
+// initial size signal
+window.addEventListener('load',function(){{
+  window.parent.postMessage({{type:'qf-resize',h:document.body.scrollHeight+20}},'*');
+}});
+</script>
+</body></html>"""
+
+    components.html(full_html, height=max_h, scrolling=True)
 
 
 def render_tc_summary(tcs: list):
