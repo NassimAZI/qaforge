@@ -1,12 +1,14 @@
-> # 🧪 QAForge — AI Test Case Generator
->
-> **Version 0.6**
-> **QAForge** is a web application that automatically generates professional, structured QA test cases from a user story or feature description, using AI.
+# 🧪 QAForge — AI Test Case Generator
+
+**Version 0.7**
+**QAForge** is a web application that automatically generates professional, structured QA test cases from a user story or feature description, using AI.
 
 ---
 
 ## ✨ Features
 
+- **Dark design system**: JetBrains Mono + Inter, calibration-ruler stepper, accordion TC cards with priority/technique/automation pills
+- **UX improvements**: session status in sidebar, confirmation before new session, ETA during generation, token warning before submit, progress bar always visible
 - **5 LLM providers**: Gemini, OpenAI, Groq, Mistral, OpenRouter
 - **Multi-file upload**: PDF (text + images), DOCX (paragraphs + tables + images), TXT, MD, direct images (max 5 files)
 - **Smart extraction**: PDF via PyMuPDF (positional order), DOCX with Markdown tables, `[IMAGE_N — file]` markers
@@ -51,6 +53,8 @@ The AI generates a test checklist per technique:
 
 The AI writes execution-ready test cases **directly as structured JSON** (batches of 6, completeness verified per pre-assigned TC id — missing scenarios are retried, then surfaced with a targeted "regenerate missing" repair):
 
+- **Accordion cards**: each TC is a clickable card with priority/technique/automation pills — no more wall of markdown
+- **Summary grid**: total TCs, BR coverage, automation ratio, estimated manual run time
 - **Technique** field (test design traceability)
 - Real test data in steps
 - Expected result in natural language
@@ -266,7 +270,10 @@ app.py
 ├── Prompts               PROMPT_P1_QUESTIONS · PROMPT_P1_CHAT (structured updates)
 │                         PROMPT_P2 · PROMPT_P2_MODIFY (diff)
 │                         PROMPT_P3_GEN (JSON) · PROMPT_P3_MODIFY (diff)
-└── UI                    render_tab_bar / Phase 1 / Phase 2 / Phase 3
+├── UI helpers            render_stepper (graduation-ruler, components.html)
+│                         render_tc_cards (accordion, components.html)
+│                         render_tc_summary (stats grid)
+└── UI                    Phase 1 / Phase 2 / Phase 3
 ```
 
 ### Single source of truth (JSON-first)
