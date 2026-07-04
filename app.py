@@ -1038,17 +1038,13 @@ def render_stepper():
         if phase == p: return "active"
         return ""
 
-    ticks = "".join(
-        f'<div class="qf-tick{" major" if i in (0,4) else ""} {_rail_cls(p)}" style="left:{i*25}%;"></div>'
-        for i in range(5)
-    )
-
     def _seg(p, label):
         rc = _rail_cls(p); nc = _node_cls(p); lc = _lbl_cls(p)
-        t = "".join(
-            f'<div class="qf-tick{" major" if i in (0,4) else ""} {rc}" style="left:{i*25}%;"></div>'
-            for i in range(5)
-        )
+        parts = []
+        for i in range(5):
+            maj = " major" if i in (0, 4) else ""
+            parts.append(f'<div class="qf-tick{maj} {rc}" style="left:{i*25}%;"></div>')
+        t = "".join(parts)
         return f"""
         <div class="qf-step">
           <div class="qf-step-rail {rc}">{t}</div>
