@@ -130,3 +130,73 @@ class TestDocPagesToUsText:
     def test_truncation(self):
         txt = doc_pages_to_us_text({"name": "Big", "content": "x" * 30000})
         assert len(txt) < 20000 and "truncated" in txt
+
+
+# ── Multi-reference fetch, linked docs, parser fix ────────────────────────────
+
+from clickup_import import find_doc_urls, fetch_many, SOURCE_SEPARATOR
+
+
+class FakeClient:
+    """No-network stand-in for ClickUpClient."""
+    def get_task(self, task_id, team_id=None):
+        if task_id == "boom":
+            raise Exception("task 'boom' not found (404)")
+        return {"id": task_id, "name": f"Task {task_id}",
+                "markdown_description": f"desc of {task_id}"}
+
+    def get_doc_page(self, ws, doc, page):
+        return {"name": f"Page {page}", "content": "spec content " + "x" * 100}
+
+    def get_doc_pages(self, ws, doc):
+        return [{"name": "P1", "content": "c1"}, {"name": "P2", "content": "c2"}]
+
+
+class TestParserFix:
+    def test_workspace_plus_native_id_url(self):
+        """Production case: /t/{workspace}/{native_id} is not a custom id."""
+        ref = extract_ref("https://app.clickup.com/t/90121871168/869dzty9q")
+        assert ref == {"kind": "task", "task_id": "869dzty9q", "team_id": None}
+
+    def test_real_custom_id_still_uses_team(self):
+        ref = extract_ref("https://app.clickup.com/t/9012/TRESO-142")
+        assert ref["task_id"] == "TRESO-142" and ref["team_id"] == "9012"
+
+
+class TestFindDocUrls:
+    def test_finds_and_dedupes(self):
+        txt = ("see https://app.clickup.com/90121871168/docs/2kxux7u0-512/2kxux7u0-32 "
+               "and again https://app.clickup.com/90121871168/docs/2kxux7u0-512/2kxux7u0-32 "
+               "plus https://app.clickup.com/90121871168/docs/other-1")
+        urls = find_doc_urls(txt)
+        assert len(urls) == 2
+        assert urls[0].endswith("2kxux7u0-32")
+
+    def test_ignores_task_urls_and_empty(self):
+        assert find_doc_urls("https://app.clickup.com/t/abc123") == []
+        assert find_doc_urls("") == []
+
+
+class TestFetchMany:
+    def test_multi_source_concatenation(self):
+        refs = "abc123\nhttps://app.clickup.com/90121871168/docs/d-1/p-1"
+        text, results = fetch_many(refs, client=FakeClient())
+        assert [s for _, s, _ in results] == ["ok", "ok"]
+        assert SOURCE_SEPARATOR in text
+        assert "[ClickUp abc123] Task abc123" in text and "## Page p-1" in text
+
+    def test_per_source_error_does_not_abort(self):
+        text, results = fetch_many("boom\nabc123", client=FakeClient())
+        statuses = {r: s for r, s, _ in results}
+        assert statuses["boom"] == "error" and statuses["abc123"] == "ok"
+        assert "Task abc123" in text
+
+    def test_budget_skips_explicitly(self):
+        refs = "abc123\nhttps://app.clickup.com/1/docs/d-1/p-1"
+        text, results = fetch_many(refs, client=FakeClient(), max_chars=80)
+        assert results[0][1] == "ok"
+        assert results[1][1] == "skipped" and "budget" in results[1][2]
+
+    def test_blank_lines_ignored(self):
+        _, results = fetch_many("\n  \nabc123\n\n", client=FakeClient())
+        assert len(results) == 1

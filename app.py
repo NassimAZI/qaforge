@@ -761,7 +761,7 @@ defaults = {
     "p3_chat_log": [], "p3_missing": [], "p3_plan_ctx": "",
     "p1_questions": [], "p1_answers": {}, "p1_summary": "", "p1_user_story": "", "p1_raw_prompt": "", "p1_extra_ctx": "", "p1_iso_techniques": [], "p1_chat_msgs": [],
     "p1_business_rules": [], "p1_actors": [], "p1_screens": [],
-    "us_input_text": "", "clickup_token": "", "clickup_task_ref": "",
+    "us_input_text": "", "clickup_token": "", "clickup_refs": "", "clickup_linked": [],
     "testmo_projects": None, "testmo_templates": None, "testmo_templates_pid": None,
     "testmo_last_push": [], "testmo_pushed_sig": None,
     "temperature": 0.2, "p2_scenarios": [], "p2_summary": "", "p2_review": {}, "p2_last_reply": "", "p2_overlaps": [],
@@ -1514,39 +1514,56 @@ if st.session_state.active_phase == 1:
     if not st.session_state.us_submitted:
         with st.expander("📥 Import from ClickUp (optional)", expanded=False):
             st.caption(
-                "Fetches a task and **pre-fills** the field below — review and enrich "
-                "the ticket before analyzing: ticket quality drives test quality. "
+                "Fetches tasks and/or Docs and **pre-fills** the field below — review "
+                "and enrich before analyzing: ticket quality drives test quality. "
+                "Best granularity: one feature per session, 2-3 complementary sources "
+                "(the ticket + its spec), not a whole space. "
                 "🔐 Token lives in this session only; for a company ClickUp, run "
                 "QAForge locally."
             )
-            cc1, cc2 = st.columns(2)
-            with cc1:
-                st.text_input("ClickUp API token", key="clickup_token", type="password",
-                              help="ClickUp → Settings → Apps → API Token (starts with 'pk_')")
-            with cc2:
-                st.text_input("Task or Doc — ID or URL", key="clickup_task_ref",
-                              placeholder="Task id/URL or Doc URL (…/docs/…)")
-            if st.button("📥 Fetch task", key="clickup_fetch",
-                         disabled=not (st.session_state.clickup_token and st.session_state.clickup_task_ref)):
-                try:
-                    ref = cui.extract_ref(st.session_state.clickup_task_ref)
-                    client = cui.ClickUpClient(st.session_state.clickup_token)
-                    if ref["kind"] == "task":
-                        task = client.get_task(ref["task_id"], ref["team_id"])
-                        st.session_state.us_input_text = cui.task_to_us_text(task)[:20000]
-                        loaded = task.get("name", "?")
-                    else:  # doc — single page if the URL points to one, else whole doc
-                        if ref["page_id"]:
-                            pages = client.get_doc_page(ref["workspace_id"],
-                                                        ref["doc_id"], ref["page_id"])
-                        else:
-                            pages = client.get_doc_pages(ref["workspace_id"], ref["doc_id"])
-                        st.session_state.us_input_text = cui.doc_pages_to_us_text(
-                            pages, st.session_state.clickup_task_ref)[:20000]
-                        loaded = "Doc " + ref["doc_id"]
-                    st.success(f"✅ “{loaded}” loaded below — review it before analyzing.")
-                except Exception as e:
-                    st.error(f"ClickUp fetch failed: {e}")
+            st.text_input("ClickUp API token", key="clickup_token", type="password",
+                          help="ClickUp → Settings → Apps → API Token (starts with 'pk_')")
+            st.text_area("References — one per line (task id/URL, Doc URL)",
+                         key="clickup_refs", height=90,
+                         placeholder="https://app.clickup.com/t/868c9q3zv\n"
+                                     "https://app.clickup.com/9012…/docs/…/…")
+
+            def _clickup_fetch(refs_text):
+                text, results = cui.fetch_many(refs_text, st.session_state.clickup_token)
+                if text:
+                    st.session_state.us_input_text = text[:20000]
+                for ref, status, detail in results:
+                    short = ref if len(ref) <= 70 else ref[:67] + "…"
+                    if status == "ok":
+                        st.success(f"✅ {detail} — {short}")
+                    elif status == "skipped":
+                        st.warning(f"⏭️ {short}: {detail}")
+                    else:
+                        st.error(f"❌ {short}: {detail}")
+                # Linked Docs found in the fetched content, not already fetched
+                fetched = {r for r, s, _ in results}
+                st.session_state.clickup_linked = [
+                    u for u in cui.find_doc_urls(text) if u not in fetched
+                ]
+                if any(s == "ok" for _, s, _ in results):
+                    st.info("Loaded below — review it before analyzing.")
+
+            if st.button("📥 Fetch", key="clickup_fetch",
+                         disabled=not (st.session_state.clickup_token
+                                       and st.session_state.clickup_refs.strip())):
+                st.session_state.clickup_linked = []
+                _clickup_fetch(st.session_state.clickup_refs)
+
+            if st.session_state.clickup_linked:
+                n = len(st.session_state.clickup_linked)
+                st.info(f"📎 {n} linked Doc{'s' if n > 1 else ''} referenced in the "
+                        "fetched content — load only what is relevant to THIS feature.")
+                if st.button(f"📎 Also load {n} linked Doc{'s' if n > 1 else ''}",
+                             key="clickup_fetch_linked"):
+                    combined = (st.session_state.clickup_refs.rstrip() + "\n"
+                                + "\n".join(st.session_state.clickup_linked))
+                    st.session_state.clickup_linked = []
+                    _clickup_fetch(combined)
 
         us_input = st.text_area("User Story + Acceptance Criteria", height=180, max_chars=20000,
             key="us_input_text",

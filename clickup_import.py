@@ -74,7 +74,12 @@ def extract_ref(url_or_id: str) -> dict:
             if len(after) == 1:
                 return {"kind": "task", "task_id": after[0], "team_id": None}
             if len(after) >= 2:
-                return {"kind": "task", "task_id": after[1], "team_id": after[0]}
+                # /t/{team_id}/{custom_id} — but users also paste
+                # /t/{workspace_id}/{native_id}; only real custom ids
+                # (PROJ-123 shape) need the team_id resolution mode.
+                if _CUSTOM_ID_RE.match(after[1]):
+                    return {"kind": "task", "task_id": after[1], "team_id": after[0]}
+                return {"kind": "task", "task_id": after[1], "team_id": None}
         raise ValueError(f"Unrecognised ClickUp URL (expected …/t/<task_id> "
                          f"or …/docs/<doc_id>): {ref}")
 
@@ -171,6 +176,75 @@ def doc_pages_to_us_text(pages, source_url: str = "", max_chars: int = 19000) ->
     if len(text) > max_chars:
         text = text[:max_chars] + "\n\n[… truncated — Doc longer than the input limit]"
     return text
+
+
+
+
+_DOC_URL_RE = re.compile(
+    r"https://app\.clickup\.com/\d+/docs/[A-Za-z0-9_-]+(?:/[A-Za-z0-9_-]+)?"
+)
+
+SOURCE_SEPARATOR = "\n\n" + "═" * 40 + "\n\n"
+
+
+def find_doc_urls(text: str) -> list[str]:
+    """Doc URLs referenced inside fetched content (e.g. a spec Doc attached to
+    a task). Returned for the QA to *choose* to load — never auto-fetched:
+    a linked Doc is not necessarily relevant to this feature's tests."""
+    seen, urls = set(), []
+    for u in _DOC_URL_RE.findall(text or ""):
+        if u not in seen:
+            seen.add(u)
+            urls.append(u)
+    return urls
+
+
+def fetch_many(refs_text: str, token: str | None = None, client=None,
+               max_chars: int = 19000) -> tuple[str, list[tuple[str, str, str]]]:
+    """Fetch several references (one per line: task ids/URLs, Doc URLs) and
+    concatenate them with per-source headers.
+
+    Returns (text, results) where results is a list of
+    (reference, status, detail) with status ∈ {'ok', 'error', 'skipped'}.
+    Per-source errors don't abort the batch; sources that would blow the
+    input budget are skipped explicitly (never silently truncated mid-source,
+    except a single source that alone exceeds the budget).
+    """
+    client = client or ClickUpClient(token or "")
+    blocks, results = [], []
+    used = 0
+    for line in (refs_text or "").splitlines():
+        ref_str = line.strip()
+        if not ref_str:
+            continue
+        try:
+            ref = extract_ref(ref_str)
+            if ref["kind"] == "task":
+                task = client.get_task(ref["task_id"], ref["team_id"])
+                text, label = task_to_us_text(task), task.get("name", ref["task_id"])
+            else:
+                if ref["page_id"]:
+                    pages = client.get_doc_page(ref["workspace_id"],
+                                                ref["doc_id"], ref["page_id"])
+                else:
+                    pages = client.get_doc_pages(ref["workspace_id"], ref["doc_id"])
+                text = doc_pages_to_us_text(pages, ref_str, max_chars=max_chars)
+                label = f"Doc {ref['doc_id']}"
+        except Exception as e:
+            results.append((ref_str, "error", str(e)))
+            continue
+
+        sep = len(SOURCE_SEPARATOR) if blocks else 0
+        if blocks and used + sep + len(text) > max_chars:
+            results.append((ref_str, "skipped",
+                            "input budget reached — paste the specific page URL "
+                            "instead of the whole Doc, or run a separate session"))
+            continue
+        blocks.append(text)
+        used += sep + len(text)
+        results.append((ref_str, "ok", label))
+
+    return SOURCE_SEPARATOR.join(blocks)[:max_chars], results
 
 
 class ClickUpClient:
