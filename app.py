@@ -8,6 +8,7 @@ import base64
 from collections import defaultdict
 from PIL import Image
 import docx
+import testmo_export as tme
 
 # ── Smart extraction — requires: pip install pymupdf python-docx Pillow
 # PyMuPDF is imported lazily so the app still starts even without it
@@ -571,6 +572,140 @@ with st.sidebar:
             del st.session_state[k]
         st.rerun()
 
+def render_testmo_export(tc_data):
+    """Testmo export section: CSV (wizard import) + direct API push."""
+    if not tc_data:
+        return
+    st.divider()
+    st.markdown("### 🧪 Export to Testmo")
+
+    tab_csv, tab_api = st.tabs(["📊 CSV (import wizard)", "🚀 API push (direct)"])
+
+    # ── Option A · CSV for Testmo's universal import wizard ──────────────────
+    with tab_csv:
+        st.caption(
+            "One row per step. In the Testmo import wizard: check "
+            "**“A test case can span across multiple rows”**, pick a "
+            "**Case (steps)** template, map **Name** as the case column and "
+            "**Step / Step Expected** as step sub-fields. Priority values and "
+            "**Tags** (technique + BR-x traceability) map in the wizard. "
+            "File is UTF-8 — select UTF-8 encoding in the wizard."
+        )
+        folder = st.text_input("Folder name", value="QAForge",
+                               key="testmo_csv_folder",
+                               help=HELP_TEXTS.get("testmo_folder",
+                                    "Testmo can auto-create this folder on import."))
+        st.download_button(
+            "📊 Download Testmo CSV",
+            data=tme.build_csv_testmo(tc_data, folder),  # plain UTF-8: a BOM could break the wizard's header mapping
+            file_name="test_cases_testmo.csv", mime="text/csv",
+            use_container_width=True,
+        )
+
+    # ── Option B · Direct push via REST API ──────────────────────────────────
+    with tab_api:
+        st.caption(
+            "Bulk-creates the cases via `POST /projects/{id}/cases` (max 100 "
+            "per request). The template and priority IDs are discovered from "
+            "your instance — nothing hardcoded."
+        )
+        st.warning(
+            "🔐 The token lives in this session only and is never stored. "
+            "For a **company** Testmo instance, run QAForge **locally** "
+            "(`streamlit run app.py`) rather than on Streamlit Cloud, and "
+            "check your internal AI/tooling policy first.",
+            icon="⚠️",
+        )
+        c1, c2 = st.columns(2)
+        with c1:
+            st.text_input("Instance URL", key="testmo_url",
+                          placeholder="https://yourteam.testmo.net")
+        with c2:
+            st.text_input("API token", key="testmo_token", type="password")
+
+        if not (st.session_state.get("testmo_url") and st.session_state.get("testmo_token")):
+            st.info("Enter your instance URL and API token to continue.")
+            return
+
+        # Step 1 — connect & discover projects/templates (cached per session)
+        if st.button("🔌 Connect & load projects", use_container_width=True):
+            try:
+                client = tme.TestmoClient(st.session_state.testmo_url,
+                                          st.session_state.testmo_token)
+                st.session_state.testmo_projects = client.get_projects()
+                st.session_state.testmo_templates = None      # reset downstream choice
+                st.session_state.testmo_templates_pid = None  # force re-fetch (same-project reconnect)
+                if not st.session_state.testmo_projects:
+                    st.warning("Connected, but no projects visible with this token.")
+            except Exception as e:
+                st.error(f"Testmo connection failed: {e}")
+
+        projects = st.session_state.get("testmo_projects")
+        if not projects:
+            return
+
+        proj_labels = {f'{p.get("name", "?")} (#{p.get("id")})': p.get("id") for p in projects}
+        proj_choice = st.selectbox("Project", list(proj_labels.keys()), key="testmo_project_sel")
+        project_id = proj_labels[proj_choice]
+
+        # Step 2 — templates of the selected project
+        if st.session_state.get("testmo_templates_pid") != project_id:
+            try:
+                client = tme.TestmoClient(st.session_state.testmo_url,
+                                          st.session_state.testmo_token)
+                st.session_state.testmo_templates = client.get_templates(project_id)
+                st.session_state.testmo_templates_pid = project_id
+            except Exception as e:
+                st.error(f"Could not load templates: {e}")
+                return
+
+        templates = st.session_state.get("testmo_templates") or []
+        parsed = [tme.parse_template(t) for t in templates]
+        # Steps-capable templates first — that's what we want 99% of the time
+        parsed.sort(key=lambda t: t["steps_key"] is None)
+        if not parsed:
+            st.error("No test case templates found in this project.")
+            return
+        tpl_labels = {
+            f'{t["template_name"]} (#{t["template_id"]})'
+            + ("" if t["steps_key"] else " — ⚠️ no steps field"): i
+            for i, t in enumerate(parsed)
+        }
+        tpl_choice = st.selectbox("Case template", list(tpl_labels.keys()), key="testmo_tpl_sel")
+        tpl = parsed[tpl_labels[tpl_choice]]
+
+        folder_id = st.number_input(
+            "Folder ID (optional — 0 lets Testmo auto-create one)",
+            min_value=0, value=0, key="testmo_folder_id",
+        )
+
+        # Step 3 — preview payload & push
+        cases, notes = tme.tc_to_testmo_cases(tc_data, tpl,
+                                              folder_id or None)
+        for n in notes:
+            st.info(f"ℹ️ {n}")
+        with st.expander(f"👁️ Preview API payload ({len(cases)} cases)", expanded=False):
+            st.json(cases[:3] + ([{"…": f"{len(cases) - 3} more"}] if len(cases) > 3 else []))
+
+        push_sig = hash((project_id, tuple(c["name"] for c in cases)))
+        if st.session_state.get("testmo_pushed_sig") == push_sig:
+            st.warning("⚠️ These exact cases were already pushed to this project in this "
+                       "session — pushing again will create duplicates.", icon="♻️")
+        if st.button(f"🚀 Push {len(cases)} cases to Testmo", type="primary",
+                     use_container_width=True):
+            try:
+                client = tme.TestmoClient(st.session_state.testmo_url,
+                                          st.session_state.testmo_token)
+                with st.spinner("Pushing to Testmo…"):
+                    created = client.push_cases(project_id, cases)
+                st.success(f"✅ {len(created)} test cases created in Testmo "
+                           f"(project #{project_id}).")
+                st.session_state.testmo_last_push = [c.get("id") for c in created]
+                st.session_state.testmo_pushed_sig = push_sig
+            except Exception as e:
+                st.error(f"Push failed: {e}")
+
+
 # ── SESSION STATE ─────────────────────────────────────────────────────────────
 defaults = {
     "active_phase": 1, "phase_reached": 1,
@@ -580,6 +715,8 @@ defaults = {
     "p3_chat_log": [], "p3_missing": [], "p3_plan_ctx": "",
     "p1_questions": [], "p1_answers": {}, "p1_summary": "", "p1_user_story": "", "p1_raw_prompt": "", "p1_extra_ctx": "", "p1_iso_techniques": [], "p1_chat_msgs": [],
     "p1_business_rules": [], "p1_actors": [], "p1_screens": [],
+    "testmo_projects": None, "testmo_templates": None, "testmo_templates_pid": None,
+    "testmo_last_push": [], "testmo_pushed_sig": None,
     "temperature": 0.2, "p2_scenarios": [], "p2_summary": "", "p2_review": {}, "p2_last_reply": "", "p2_overlaps": [],
 }
 for k, v in defaults.items():
@@ -1925,6 +2062,7 @@ elif st.session_state.active_phase == 3:
                                mime="text/csv", use_container_width=True)
         with st.expander(f"👁️ Preview JSON ({len(tc_data)} test cases)", expanded=False):
             st.json(tc_data)
+        render_testmo_export(tc_data)
     else:
         st.info("No test cases yet — validate the Phase 2 plan to generate them.")
 

@@ -302,3 +302,29 @@ All user-visible tooltip strings are stored in the `HELP_TEXTS` dictionary, plac
 - Streamlit Cloud builds can fail on transient PyPI timeouts (`ReadTimeoutError ... /simple/<pkg>/` then a misleading `ResolutionImpossible`) — reboot the app; pinned requirements keep the resolver from backtracking
 
 ---
+
+## Testmo export (optional)
+
+QAForge's core flow is unchanged — Testmo is one more export option at the end
+of Phase 3, alongside Markdown / JSON / CSV. Two paths, same source of truth
+(`structured_test_cases`), implemented in the standalone module
+`testmo_export.py` (Streamlit-free, covered by `test_testmo_export.py`,
+25 tests):
+
+- **CSV (import wizard)** — multi-row format (one row per step). In the wizard:
+  enable *"A test case can span across multiple rows"*, pick a *Case (steps)*
+  template, map *Name* as the case column and *Step / Step Expected* as step
+  sub-fields. Technique + BR-x traceability land as **Tags**. File is plain
+  UTF-8 (select UTF-8 in the wizard).
+- **API push (direct)** — bulk `POST /projects/{id}/cases` (100 per request).
+  Templates, priority option IDs and text fields are discovered live from the
+  instance (`GET /templates`) — nothing hardcoded. EN/FR priority labels and
+  accented field names ("Priorité", "Préconditions") are matched
+  accent-insensitively. Payload preview + duplicate-push guard included.
+
+⚠️ For a **company** Testmo instance, run QAForge locally
+(`streamlit run app.py`) rather than on Streamlit Cloud, and clear your
+internal AI/tooling policy before pasting an API token.
+
+Delete `testmo_export.py` and the app still runs — it is a satellite, not a
+dependency.
