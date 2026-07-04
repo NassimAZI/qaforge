@@ -9,6 +9,7 @@ from collections import defaultdict
 from PIL import Image
 import docx
 import testmo_export as tme
+import clickup_import as cui
 
 # ── Smart extraction — requires: pip install pymupdf python-docx Pillow
 # PyMuPDF is imported lazily so the app still starts even without it
@@ -760,6 +761,7 @@ defaults = {
     "p3_chat_log": [], "p3_missing": [], "p3_plan_ctx": "",
     "p1_questions": [], "p1_answers": {}, "p1_summary": "", "p1_user_story": "", "p1_raw_prompt": "", "p1_extra_ctx": "", "p1_iso_techniques": [], "p1_chat_msgs": [],
     "p1_business_rules": [], "p1_actors": [], "p1_screens": [],
+    "us_input_text": "", "clickup_token": "", "clickup_task_ref": "",
     "testmo_projects": None, "testmo_templates": None, "testmo_templates_pid": None,
     "testmo_last_push": [], "testmo_pushed_sig": None,
     "temperature": 0.2, "p2_scenarios": [], "p2_summary": "", "p2_review": {}, "p2_last_reply": "", "p2_overlaps": [],
@@ -1510,7 +1512,33 @@ if st.session_state.active_phase == 1:
     st.markdown('<div class="badge b1">🔍 Phase 1 — Senior QA Analyst: Requirements Analysis</div>', unsafe_allow_html=True)
 
     if not st.session_state.us_submitted:
+        with st.expander("📥 Import from ClickUp (optional)", expanded=False):
+            st.caption(
+                "Fetches a task and **pre-fills** the field below — review and enrich "
+                "the ticket before analyzing: ticket quality drives test quality. "
+                "🔐 Token lives in this session only; for a company ClickUp, run "
+                "QAForge locally."
+            )
+            cc1, cc2 = st.columns(2)
+            with cc1:
+                st.text_input("ClickUp API token", key="clickup_token", type="password",
+                              help="ClickUp → Settings → Apps → API Token (starts with 'pk_')")
+            with cc2:
+                st.text_input("Task ID or URL", key="clickup_task_ref",
+                              placeholder="868c9q3zv or https://app.clickup.com/t/…")
+            if st.button("📥 Fetch task", key="clickup_fetch",
+                         disabled=not (st.session_state.clickup_token and st.session_state.clickup_task_ref)):
+                try:
+                    ref = cui.extract_task_ref(st.session_state.clickup_task_ref)
+                    task = cui.ClickUpClient(st.session_state.clickup_token).get_task(**ref)
+                    st.session_state.us_input_text = cui.task_to_us_text(task)[:20000]
+                    st.success(f"✅ Task “{task.get('name', '?')}” loaded below — review it "
+                               "before analyzing.")
+                except Exception as e:
+                    st.error(f"ClickUp fetch failed: {e}")
+
         us_input = st.text_area("User Story + Acceptance Criteria", height=180, max_chars=20000,
+            key="us_input_text",
             placeholder="As a [user], I want to [action] so that [benefit].\n\nAcceptance Criteria:\n- ...")
         if us_input: st.caption(f"{len(us_input):,}/20,000 characters")
 

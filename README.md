@@ -328,3 +328,14 @@ internal AI/tooling policy before pasting an API token.
 
 Delete `testmo_export.py` and the app still runs — it is a satellite, not a
 dependency.
+
+## ClickUp import (optional)
+
+Input-side satellite (`clickup_import.py`, tested by `test_clickup_import.py`):
+fetch a ClickUp task by id or URL and **pre-fill** the User Story field —
+never generate directly from a fetch. The QA reviews and enriches the ticket
+first: ticket quality drives test quality. Simple scalar custom fields (where
+acceptance criteria often live) are included; complex ones are skipped.
+Custom task ids (PROJ-123) are supported via the full task URL. Same security
+posture as Testmo: session-only token, run locally for company data. Delete
+`clickup_import.py` and the app still runs.
