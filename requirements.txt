@@ -8,6 +8,7 @@ pypdf==6.13.2
 pymupdf==1.27.2.3
 langdetect==1.0.9
 httpx==0.28.1
+json-repair==0.61.1
 # Direct wheel URL: the PyPI index page /simple/httpcore/ times out from
 # Streamlit Cloud's network (uv AND pip, multiple builds). This bypasses the
 # index entirely and downloads from files.pythonhosted.org, which works fine.
