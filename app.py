@@ -314,17 +314,28 @@ def generate_test_cases_in_batches(plan_ctx, scenarios, batch_size=6):
     batch by id — no completion-token heuristic, no duplicated content."""
     batches = [scenarios[i:i + batch_size] for i in range(0, len(scenarios), batch_size)]
     all_tcs, total = [], len(batches)
-    progress = st.progress(0, text=f"Generating test cases… batch 1/{total}")
+    is_free = st.session_state.get("provider") in FREE_TIER_PROVIDERS
+    sleep_s = 20 if is_free else 1
+    # ETA: ~30s per batch on paid tiers, ~50s on free (generation + rate-limit sleep)
+    secs_per_batch = 50 if is_free else 30
+    eta_total = total * secs_per_batch
+    eta_min, eta_sec = divmod(eta_total, 60)
+    eta_str = f"{eta_min}m{eta_sec:02d}s" if eta_min else f"~{eta_sec}s"
+    progress = st.progress(0, text=f"Generating test cases… batch 1/{total} — est. {eta_str} total")
 
     for idx, batch in enumerate(batches):
         all_tcs.extend(_generate_tc_batch(plan_ctx, batch))
+        remaining = (total - idx - 1) * secs_per_batch
+        rem_min, rem_sec = divmod(remaining, 60)
+        rem_str = (f"{rem_min}m{rem_sec:02d}s" if rem_min else f"~{rem_sec}s") if remaining else ""
         progress.progress(
             (idx + 1) / total,
-            text=f"Generating test cases… batch {idx + 2}/{total}" if idx + 1 < total else "✅ Done!",
+            text=(f"Generating test cases… batch {idx + 2}/{total} — ~{rem_str} left"
+                  if idx + 1 < total else "✅ Done!"),
         )
         if idx + 1 < total:
             # Free-tier TPM windows are per-minute: pace batches accordingly
-            time.sleep(20 if st.session_state.get("provider") in FREE_TIER_PROVIDERS else 1)
+            time.sleep(sleep_s)
 
     progress.empty()
     generated_ids = {tc.get("id") for tc in all_tcs}
@@ -558,12 +569,647 @@ PROVIDER_DEFAULTS = {
 st.set_page_config(page_title="QAForge – AI Test Case Generator", page_icon="🧪", layout="wide")
 st.markdown("""
 <style>
-.badge{display:inline-block;padding:6px 16px;border-radius:20px;font-weight:700;font-size:13px;margin-bottom:16px;}
-.b1{background:#1a3a5c;color:#60aaff;border:1px solid #2255aa;}
-.b2{background:#1a3a25;color:#60cc88;border:1px solid #226644;}
-.b3{background:#3a1a2a;color:#cc6699;border:1px solid #882255;}
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Inter:wght@300;400;500;600&display=swap');
+
+/* ── TOKENS ── */
+:root {
+  --ground:       #0d1117;
+  --surface:      #161b22;
+  --surface-2:    #1c2128;
+  --border:       #21262d;
+  --border-2:     #30363d;
+  --text:         #e6edf3;
+  --text-muted:   #8b949e;
+  --text-dim:     #484f58;
+  --accent:       #3b82f6;
+  --accent-glow:  rgba(59,130,246,0.15);
+  --accent2:      #10b981;
+  --accent2-glow: rgba(16,185,129,0.12);
+  --warn:         #f59e0b;
+  --danger:       #ef4444;
+  --mono: 'JetBrains Mono', 'Fira Code', monospace;
+  --sans: 'Inter', system-ui, sans-serif;
+  --r:  6px;
+  --rl: 10px;
+}
+
+/* ── BASE ── */
+html, body, [data-testid="stAppViewContainer"] {
+  background: var(--ground) !important;
+  color: var(--text) !important;
+  font-family: var(--sans) !important;
+}
+[data-testid="stSidebar"] {
+  background: var(--surface) !important;
+  border-right: 1px solid var(--border) !important;
+}
+[data-testid="stSidebar"] > div { padding-top: 12px !important; }
+
+/* sidebar labels */
+[data-testid="stSidebar"] h1 {
+  font-family: var(--mono) !important;
+  font-size: 13px !important;
+  letter-spacing: 0.04em !important;
+  color: var(--text) !important;
+}
+
+/* ── MAIN AREA ── */
+[data-testid="stMain"] > div { background: var(--ground) !important; }
+section[data-testid="stMain"] { background: var(--ground) !important; }
+
+/* ── INPUTS & TEXTAREAS ── */
+[data-testid="stTextInput"] input,
+[data-testid="stTextArea"] textarea,
+[data-testid="stNumberInput"] input {
+  background: var(--ground) !important;
+  border: 1px solid var(--border-2) !important;
+  border-radius: var(--r) !important;
+  color: var(--text) !important;
+  font-family: var(--mono) !important;
+  font-size: 12px !important;
+}
+[data-testid="stTextInput"] input:focus,
+[data-testid="stTextArea"] textarea:focus {
+  border-color: var(--accent) !important;
+  box-shadow: 0 0 0 2px var(--accent-glow) !important;
+}
+
+/* ── BUTTONS ── */
+[data-testid="stButton"] > button {
+  font-family: var(--sans) !important;
+  font-size: 12px !important;
+  border-radius: var(--r) !important;
+  border: 1px solid var(--border-2) !important;
+  background: var(--surface) !important;
+  color: var(--text-muted) !important;
+  transition: all 0.14s !important;
+}
+[data-testid="stButton"] > button:hover {
+  border-color: var(--border-2) !important;
+  color: var(--text) !important;
+  background: var(--surface-2) !important;
+}
+[data-testid="stButton"] > button[kind="primary"] {
+  background: var(--accent) !important;
+  border-color: var(--accent) !important;
+  color: #fff !important;
+  font-weight: 600 !important;
+}
+[data-testid="stButton"] > button[kind="primary"]:hover {
+  background: #2563eb !important;
+  box-shadow: 0 0 12px var(--accent-glow) !important;
+}
+
+/* ── DOWNLOAD BUTTONS ── */
+[data-testid="stDownloadButton"] > button {
+  font-family: var(--mono) !important;
+  font-size: 11px !important;
+  border-radius: var(--r) !important;
+  border: 1px solid var(--border-2) !important;
+  background: var(--ground) !important;
+  color: var(--text-muted) !important;
+  transition: all 0.14s !important;
+}
+[data-testid="stDownloadButton"] > button:hover {
+  border-color: var(--accent) !important;
+  color: var(--accent) !important;
+}
+
+/* ── SELECT / RADIO ── */
+[data-testid="stRadio"] label { color: var(--text-muted) !important; font-size: 12px !important; }
+[data-testid="stRadio"] label:has(input:checked) { color: var(--accent) !important; }
+[data-testid="stSelectbox"] > div > div {
+  background: var(--ground) !important;
+  border: 1px solid var(--border-2) !important;
+  border-radius: var(--r) !important;
+  color: var(--text) !important;
+  font-size: 12px !important;
+}
+
+/* ── PROGRESS ── */
+[data-testid="stProgress"] > div { background: var(--border-2) !important; border-radius: 3px !important; }
+[data-testid="stProgress"] > div > div { background: var(--accent2) !important; border-radius: 3px !important; box-shadow: 0 0 6px var(--accent2) !important; }
+
+/* ── ALERTS / INFO / SUCCESS / WARNING ── */
+[data-testid="stAlert"] {
+  border-radius: var(--r) !important;
+  border: 1px solid !important;
+  font-size: 12px !important;
+}
+[data-testid="stAlert"][data-baseweb="notification"] {
+  background: var(--surface) !important;
+}
+
+/* ── EXPANDER ── */
+[data-testid="stExpander"] {
+  border: 1px solid var(--border) !important;
+  border-radius: var(--rl) !important;
+  background: var(--surface) !important;
+}
+[data-testid="stExpander"] summary {
+  font-size: 12px !important;
+  color: var(--text-muted) !important;
+}
+
+/* ── DIVIDER ── */
+hr { border-color: var(--border) !important; margin: 12px 0 !important; }
+
+/* ── CAPTIONS ── */
+[data-testid="stCaptionContainer"] { color: var(--text-dim) !important; font-size: 11px !important; }
+
+/* ── CHAT ── */
+[data-testid="stChatInput"] textarea {
+  background: var(--surface) !important;
+  border: 1px solid var(--border-2) !important;
+  border-radius: var(--r) !important;
+  color: var(--text) !important;
+  font-size: 13px !important;
+}
+[data-testid="stChatMessage"] {
+  background: var(--surface) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: var(--rl) !important;
+}
+
+/* ── TABS ── */
+[data-testid="stTabs"] [role="tab"] {
+  font-family: var(--mono) !important;
+  font-size: 11px !important;
+  letter-spacing: 0.04em !important;
+  color: var(--text-muted) !important;
+}
+[data-testid="stTabs"] [role="tab"][aria-selected="true"] {
+  color: var(--accent) !important;
+  border-bottom-color: var(--accent) !important;
+}
+
+/* ── CHECKBOXES ── */
+[data-testid="stCheckbox"] label { color: var(--text-muted) !important; font-size: 12px !important; }
+
+/* ── SLIDER ── */
+[data-testid="stSlider"] [role="slider"] { background: var(--accent) !important; }
+[data-testid="stSlider"] [data-testid="stTickBarMin"],
+[data-testid="stSlider"] [data-testid="stTickBarMax"] { color: var(--text-dim) !important; font-size: 10px !important; }
+
+/* ──────────────────────────────────────────────────────────────
+   CUSTOM COMPONENTS
+   ────────────────────────────────────────────────────────────── */
+
+/* ── STEPPER (graduation ruler) ── */
+.qf-stepper {
+  display: flex;
+  align-items: flex-start;
+  gap: 0;
+  padding: 18px 0 8px;
+  margin-bottom: 8px;
+  position: relative;
+}
+.qf-step {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  position: relative;
+}
+.qf-step-rail {
+  width: 100%;
+  height: 3px;
+  background: var(--border-2);
+  position: relative;
+  border-radius: 2px;
+}
+.qf-step-rail.done { background: var(--accent2); }
+.qf-step-rail.active {
+  background: var(--accent);
+  box-shadow: 0 0 6px var(--accent-glow);
+}
+.qf-tick {
+  position: absolute;
+  top: -5px;
+  width: 1px;
+  height: 12px;
+  background: var(--border-2);
+}
+.qf-tick.major { height: 18px; top: -8px; width: 2px; }
+.qf-tick.done { background: var(--accent2); }
+.qf-tick.active { background: var(--accent); }
+.qf-node {
+  position: absolute;
+  top: -5px;
+  left: 0;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--border-2);
+  border: 2px solid var(--border-2);
+  transform: translateX(-50%);
+}
+.qf-node.done { background: var(--accent2); border-color: var(--accent2); box-shadow: 0 0 6px var(--accent2); }
+.qf-node.active { background: var(--accent); border-color: var(--accent); box-shadow: 0 0 8px var(--accent); }
+.qf-step-label {
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  margin-top: 14px;
+  white-space: nowrap;
+}
+.qf-step-label.done { color: var(--accent2); }
+.qf-step-label.active { color: var(--accent); }
+
+/* ── PHASE BADGE ── */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 14px 5px 10px;
+  border-radius: 4px;
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  margin-bottom: 16px;
+  border-left: 3px solid;
+}
+.b1 { background: rgba(59,130,246,0.08); border-color: var(--accent); color: var(--accent); }
+.b2 { background: rgba(16,185,129,0.08); border-color: var(--accent2); color: var(--accent2); }
+.b3 { background: rgba(245,158,11,0.08); border-color: var(--warn); color: var(--warn); }
+
+/* ── TC CARDS (Phase 3) ── */
+.qf-tc-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--rl);
+  margin-bottom: 6px;
+  overflow: hidden;
+  transition: border-color 0.14s;
+}
+.qf-tc-card:hover { border-color: var(--border-2); }
+.qf-tc-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 11px 16px;
+  cursor: pointer;
+  user-select: none;
+}
+.qf-tc-id {
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--accent);
+  flex-shrink: 0;
+  min-width: 40px;
+}
+.qf-tc-title {
+  flex: 1;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+}
+.qf-tc-pills { display: flex; gap: 4px; flex-shrink: 0; flex-wrap: wrap; }
+.qf-pill {
+  font-family: var(--mono);
+  font-size: 9px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--border-2);
+  color: var(--text-dim);
+  white-space: nowrap;
+  letter-spacing: 0.04em;
+}
+.qf-pill.prio-vh { border-color: var(--danger);  color: var(--danger);  background: rgba(239,68,68,0.07);  }
+.qf-pill.prio-hi { border-color: var(--warn);    color: var(--warn);    background: rgba(245,158,11,0.07); }
+.qf-pill.prio-md { border-color: var(--accent);  color: var(--accent);  background: var(--accent-glow);    }
+.qf-pill.prio-lo { border-color: var(--accent2); color: var(--accent2); background: var(--accent2-glow);   }
+.qf-pill.auto    { border-color: var(--accent2); color: var(--accent2); background: var(--accent2-glow);   }
+.qf-pill.manual  { border-color: var(--border-2); color: var(--text-dim); }
+.qf-chevron { font-size: 9px; color: var(--text-dim); transition: transform 0.2s; flex-shrink: 0; }
+
+.qf-tc-body {
+  border-top: 1px solid var(--border);
+  padding: 16px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+.qf-tc-body .full { grid-column: 1 / -1; }
+.qf-sec-label {
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  margin-bottom: 6px;
+}
+.qf-steps-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.qf-steps-table th {
+  font-family: var(--mono);
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--text-dim);
+  text-align: left;
+  padding: 0 8px 6px 0;
+  border-bottom: 1px solid var(--border);
+}
+.qf-steps-table td {
+  padding: 6px 8px 6px 0;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+  color: var(--text);
+  line-height: 1.5;
+}
+.qf-steps-table td:first-child {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--text-dim);
+  width: 24px;
+}
+.qf-steps-table td.expected { color: var(--text-muted); font-style: italic; }
+.qf-steps-table tr:last-child td { border-bottom: none; }
+
+.qf-result-box {
+  background: var(--ground);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  padding: 10px 12px;
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.6;
+}
+.qf-failure-box {
+  background: rgba(239,68,68,0.05);
+  border: 1px solid rgba(239,68,68,0.18);
+  border-radius: var(--r);
+  padding: 10px 12px;
+  font-size: 11px;
+  font-family: var(--mono);
+  color: rgba(239,68,68,0.75);
+  line-height: 1.6;
+}
+
+/* ── SUMMARY GRID ── */
+.qf-summary {
+  display: grid;
+  grid-template-columns: repeat(4,1fr);
+  gap: 1px;
+  background: var(--border);
+  border: 1px solid var(--border);
+  border-radius: var(--rl);
+  overflow: hidden;
+  margin: 16px 0;
+}
+.qf-summary-cell {
+  background: var(--surface);
+  padding: 14px 18px;
+}
+.qf-summary-val {
+  font-family: var(--mono);
+  font-size: 22px;
+  font-weight: 600;
+  color: var(--accent2);
+  line-height: 1.2;
+}
+.qf-summary-lbl {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+/* ── FILTER BAR ── */
+.qf-filter-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding: 10px 0 4px;
+}
+.qf-filter-lbl {
+  font-family: var(--mono);
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--text-dim);
+  margin-right: 2px;
+}
+.qf-filter-chip {
+  font-family: var(--mono);
+  font-size: 10px;
+  padding: 3px 9px;
+  border-radius: var(--r);
+  border: 1px solid var(--border-2);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all 0.12s;
+}
+.qf-filter-chip:hover { border-color: var(--accent); color: var(--accent); }
+
+@media (prefers-reduced-motion: reduce) {
+  .qf-step-rail.active { box-shadow: none; }
+  .qf-chevron { transition: none; }
+  .qf-tc-card { transition: none; }
+}
 </style>
 """, unsafe_allow_html=True)
+
+# ── UI HELPERS ───────────────────────────────────────────────────────────────
+
+def render_stepper():
+    """Graduation-ruler stepper — shows current phase position."""
+    phase = st.session_state.get("active_phase", 1)
+    reached = st.session_state.get("phase_reached", 1)
+
+    def _rail_cls(p):
+        if phase > p or (reached > p): return "done"
+        if phase == p: return "active"
+        return ""
+
+    def _node_cls(p):
+        if phase > p or (reached > p): return "done"
+        if phase == p: return "active"
+        return ""
+
+    def _lbl_cls(p):
+        if phase > p or (reached > p): return "done"
+        if phase == p: return "active"
+        return ""
+
+    ticks = "".join(
+        f'<div class="qf-tick{" major" if i in (0,4) else ""} {_rail_cls(p)}" style="left:{i*25}%;"></div>'
+        for i in range(5)
+    )
+
+    def _seg(p, label):
+        rc = _rail_cls(p); nc = _node_cls(p); lc = _lbl_cls(p)
+        t = "".join(
+            f'<div class="qf-tick{" major" if i in (0,4) else ""} {rc}" style="left:{i*25}%;"></div>'
+            for i in range(5)
+        )
+        return f"""
+        <div class="qf-step">
+          <div class="qf-step-rail {rc}">{t}</div>
+          <div class="qf-node {nc}"></div>
+          <div class="qf-step-label {lc}">{label}</div>
+        </div>"""
+
+    html = f"""
+    <div class="qf-stepper">
+      {_seg(1, "01 · Analysis")}
+      {_seg(2, "02 · Plan")}
+      {_seg(3, "03 · Test Cases")}
+    </div>"""
+    st.markdown(html, unsafe_allow_html=True)
+
+
+def _prio_pill(priority: str) -> str:
+    p = (priority or "").lower()
+    if "very" in p or p == "vh":   return '<span class="qf-pill prio-vh">Very High</span>'
+    if p in ("high", "hi"):        return '<span class="qf-pill prio-hi">High</span>'
+    if p in ("medium", "med"):     return '<span class="qf-pill prio-md">Medium</span>'
+    if p in ("low", "lo"):         return '<span class="qf-pill prio-lo">Low</span>'
+    return f'<span class="qf-pill">{priority}</span>'
+
+
+def _auto_pill(automation: str) -> str:
+    a = (automation or "").lower()
+    if "good" in a or "candidate" in a:
+        return '<span class="qf-pill auto">🤖 Auto</span>'
+    return '<span class="qf-pill manual">✋ Manual</span>'
+
+
+def render_tc_cards(tcs: list):
+    """Render test cases as interactive accordion cards."""
+    if not tcs:
+        return
+
+    # priority order for display
+    prio_order = {"very high": 0, "high": 1, "medium": 2, "low": 3}
+    sorted_tcs = sorted(tcs, key=lambda t: prio_order.get((t.get("priority") or "").lower(), 9))
+
+    # counts for filter bar
+    prio_counts = {"Very High": 0, "High": 0, "Medium": 0, "Low": 0}
+    auto_count = 0
+    for tc in sorted_tcs:
+        p = (tc.get("priority") or "").strip()
+        if p in prio_counts:
+            prio_counts[p] += 1
+        if "good" in (tc.get("automation") or "").lower():
+            auto_count += 1
+
+    filter_html = f"""
+    <div class="qf-filter-bar">
+      <span class="qf-filter-lbl">Filter</span>
+      <span class="qf-filter-chip">All ({len(sorted_tcs)})</span>
+      <span class="qf-filter-chip">🔴 Very High ({prio_counts['Very High']})</span>
+      <span class="qf-filter-chip">🟠 High ({prio_counts['High']})</span>
+      <span class="qf-filter-chip">🟡 Medium ({prio_counts['Medium']})</span>
+      <span class="qf-filter-chip">🟢 Low ({prio_counts['Low']})</span>
+      <span class="qf-filter-chip" style="margin-left:auto;">🤖 Automatable ({auto_count})</span>
+    </div>"""
+    st.markdown(filter_html, unsafe_allow_html=True)
+
+    cards_html = []
+    for tc in sorted_tcs:
+        tc_id    = tc.get("id", "TC-?")
+        title    = tc.get("title", "")
+        tech     = tc.get("technique", "")
+        prio     = tc.get("priority", "")
+        auto     = tc.get("automation", "")
+        covers   = tc.get("covers") or []
+        pre      = tc.get("preconditions") or []
+        steps    = tc.get("steps") or []
+        expected = tc.get("expected_result", "")
+        failure  = tc.get("failure_signature", "")
+
+        pills = _prio_pill(prio)
+        if tech:
+            pills += f' <span class="qf-pill">{tech}</span>'
+        pills += " " + _auto_pill(auto)
+        if covers:
+            for br in covers:
+                pills += f' <span class="qf-pill">{br}</span>'
+
+        # preconditions
+        if isinstance(pre, list):
+            pre_html = "".join(f"<div>— {p}</div>" for p in pre if str(p).strip())
+        else:
+            pre_html = f"<div>{pre}</div>"
+
+        # steps table rows
+        step_rows = ""
+        for i, s in enumerate(steps):
+            if isinstance(s, dict):
+                act = s.get("action", "")
+                exp = s.get("expected", "") or ""
+            else:
+                act = str(s)
+                exp = ""
+            step_rows += f"""
+            <tr>
+              <td>{i+1}</td>
+              <td>{act}</td>
+              <td class="expected">{exp}</td>
+            </tr>"""
+
+        card = f"""
+        <div class="qf-tc-card">
+          <div class="qf-tc-head" onclick="this.closest('.qf-tc-card').querySelector('.qf-tc-body').style.display=this.closest('.qf-tc-card').querySelector('.qf-tc-body').style.display==='none'?'grid':'none';this.querySelector('.qf-chevron').style.transform=this.closest('.qf-tc-card').querySelector('.qf-tc-body').style.display==='grid'?'rotate(90deg)':'rotate(0deg)'">
+            <div class="qf-tc-id">{tc_id}</div>
+            <div class="qf-tc-title">{title}</div>
+            <div class="qf-tc-pills">{pills}</div>
+            <div class="qf-chevron">▶</div>
+          </div>
+          <div class="qf-tc-body" style="display:none;">
+            <div>
+              <div class="qf-sec-label">Preconditions</div>
+              <div style="font-size:12px;color:var(--text-muted);line-height:1.7;">{pre_html if pre_html else '—'}</div>
+            </div>
+            <div>
+              <div class="qf-sec-label">Expected Result</div>
+              <div class="qf-result-box">{expected or '—'}</div>
+            </div>
+            <div class="full">
+              <div class="qf-sec-label">Steps</div>
+              <table class="qf-steps-table">
+                <thead><tr><th>#</th><th>Action</th><th>Intermediate Expected</th></tr></thead>
+                <tbody>{step_rows if step_rows else '<tr><td colspan="3" style="color:var(--text-dim);font-style:italic;">No steps defined</td></tr>'}</tbody>
+              </table>
+            </div>
+            <div class="full">
+              <div class="qf-sec-label">Failure Signature</div>
+              <div class="qf-failure-box">{failure or '—'}</div>
+            </div>
+          </div>
+        </div>"""
+        cards_html.append(card)
+
+    st.markdown("\n".join(cards_html), unsafe_allow_html=True)
+
+
+def render_tc_summary(tcs: list):
+    """Summary stats grid below the TC cards."""
+    if not tcs:
+        return
+    n = len(tcs)
+    br_all = set()
+    for tc in tcs:
+        for br in (tc.get("covers") or []):
+            br_all.add(br)
+    auto = sum(1 for tc in tcs if "good" in (tc.get("automation") or "").lower())
+    est_min = n * 15
+    est_str = f"~{est_min//60}h{est_min%60:02d}m" if est_min >= 60 else f"~{est_min}m"
+    st.markdown(f"""
+    <div class="qf-summary">
+      <div class="qf-summary-cell"><div class="qf-summary-val">{n}</div><div class="qf-summary-lbl">Test cases</div></div>
+      <div class="qf-summary-cell"><div class="qf-summary-val">{len(br_all)}</div><div class="qf-summary-lbl">BRs covered</div></div>
+      <div class="qf-summary-cell"><div class="qf-summary-val">{auto}</div><div class="qf-summary-lbl">Automatable</div></div>
+      <div class="qf-summary-cell"><div class="qf-summary-val">{est_str}</div><div class="qf-summary-lbl">Manual run est.</div></div>
+    </div>""", unsafe_allow_html=True)
+
 
 # ── SIDEBAR ───────────────────────────────────────────────────────────────────
 with st.sidebar:
@@ -604,11 +1250,39 @@ with st.sidebar:
 2. **Phase 2** — AI generates test plan → refine → validate
 3. **Phase 3** — AI writes full test cases → export (MD / JSON / CSV)
 """)
+
+    # ── Session status ────────────────────────────────────────────────────────
+    _phase = st.session_state.get("active_phase", 1)
+    _reached = st.session_state.get("phase_reached", 1)
+    if st.session_state.get("us_submitted") or _reached > 1:
+        st.divider()
+        st.markdown("**📍 Current session**")
+        _phase_labels = {1: "Phase 1 — Analysis", 2: "Phase 2 — Plan", 3: "Phase 3 — Test Cases"}
+        st.caption(f"Active: {_phase_labels.get(_phase, '—')}")
+        if st.session_state.get("p1_user_story"):
+            _preview = st.session_state.p1_user_story[:60].replace("\n", " ")
+            st.caption(f"Story: _{_preview}{'…' if len(st.session_state.p1_user_story) > 60 else ''}_")
+        _n_scenarios = len(st.session_state.get("p2_scenarios", []))
+        _n_tcs = len(st.session_state.get("structured_test_cases") or [])
+        if _n_scenarios:
+            st.caption(f"Scenarios: {_n_scenarios} · TCs: {_n_tcs if _n_tcs else '—'}")
+
     st.divider()
     if st.button("🔄 New Session", use_container_width=True):
-        for k in list(st.session_state.keys()):
-            del st.session_state[k]
+        st.session_state["_confirm_new_session"] = True
         st.rerun()
+    if st.session_state.get("_confirm_new_session"):
+        st.warning("⚠️ This will erase all current work (analysis, plan, test cases). Are you sure?")
+        col_y, col_n = st.columns(2)
+        with col_y:
+            if st.button("Yes, start over", type="primary", use_container_width=True):
+                for k in list(st.session_state.keys()):
+                    del st.session_state[k]
+                st.rerun()
+        with col_n:
+            if st.button("Cancel", use_container_width=True):
+                st.session_state["_confirm_new_session"] = False
+                st.rerun()
 
 def render_testmo_export(tc_data):
     """Testmo export section: CSV (wizard import) + direct API push."""
@@ -1509,6 +2183,7 @@ st.divider()
 #  PHASE 1
 # ═════════════════════════════════════════════════════════════════════════════
 if st.session_state.active_phase == 1:
+    render_stepper()
     st.markdown('<div class="badge b1">🔍 Phase 1 — Senior QA Analyst: Requirements Analysis</div>', unsafe_allow_html=True)
 
     if not st.session_state.us_submitted:
@@ -1531,7 +2206,7 @@ if st.session_state.active_phase == 1:
             def _clickup_fetch(refs_text):
                 text, results = cui.fetch_many(refs_text, st.session_state.clickup_token)
                 if text:
-                    st.session_state.us_input_text = text[:20000]
+                    st.session_state.us_input_text = text
                 for ref, status, detail in results:
                     short = ref if len(ref) <= 70 else ref[:67] + "…"
                     if status == "ok":
@@ -1582,6 +2257,17 @@ if st.session_state.active_phase == 1:
                 with fcols[idx]:
                     if is_image(f): st.image(f, caption=f.name, use_column_width=True)
                     else: st.markdown(f"{file_icon(f)} **{f.name}**"); st.caption(f"{round(f.size/1024,1)} KB")
+
+        # Early token estimate — shown before the user clicks, not after
+        _est_chars = len(us_input or "") + sum(getattr(f, "size", 0) // 4 for f in (uploaded_files or []))
+        _est_tokens = _est_chars // 4
+        if _est_tokens > 15000:
+            st.warning(
+                f"⚠️ ~{_est_tokens:,} estimated input tokens (text + files). "
+                "Free-tier models (Groq, OpenRouter, Mistral) will likely hit rate limits — "
+                "reduce uploaded files or switch to Gemini.",
+                icon="🚦",
+            )
 
         if st.button("🚀 Start Analysis", type="primary", use_container_width=True):
             if not us_input or len(us_input.strip()) < 20:
@@ -1656,13 +2342,6 @@ if st.session_state.active_phase == 1:
                         )
                     prompt += f"\n\n[Visuals attached: {' + '.join(img_summary_parts)}]"
 
-                est_tokens = len(prompt) // 4
-                if est_tokens > 15000:
-                    st.warning(
-                        f"⚠️ ~{est_tokens:,} input tokens (documents included). "
-                        f"Free-tier models (Groq, OpenRouter, Mistral free) will likely hit "
-                        f"rate limits — reduce uploaded files or use Gemini."
-                    )
                 with st.spinner(f"Analyzing with {provider} / `{model_choice}`…"):
                     try:
                         raw = call_llm([], PROMPT_P1_QUESTIONS, prompt, images or None, max_tokens=3000)
@@ -1776,6 +2455,9 @@ if st.session_state.active_phase == 1:
         total_q = len(questions)
         st.progress(answered / total_q if total_q else 1,
                     text=f"{answered}/{total_q} questions answered")
+
+        if answered < total_q:
+            st.caption(f"💡 {total_q - answered} question(s) left — you can still validate with unanswered questions, but more answers = better test plan.")
 
         # ── Chat libre avec l'agent (avant soumission) ───────────────────────
         st.divider()
@@ -1913,6 +2595,7 @@ if st.session_state.active_phase == 1:
 #  PHASE 2
 # ═════════════════════════════════════════════════════════════════════════════
 elif st.session_state.active_phase == 2:
+    render_stepper()
     st.markdown('<div class="badge b2">📋 Phase 2 — Lead QA Engineer: Test Checklist</div>', unsafe_allow_html=True)
 
     scenarios = st.session_state.get("p2_scenarios", [])
@@ -2117,6 +2800,7 @@ elif st.session_state.active_phase == 2:
 #  PHASE 3
 # ═════════════════════════════════════════════════════════════════════════════
 elif st.session_state.active_phase == 3:
+    render_stepper()
     st.markdown('<div class="badge b3">📝 Phase 3 — Test Architect: Detailed Test Cases</div>', unsafe_allow_html=True)
 
     tc_data = st.session_state.get("structured_test_cases") or []
@@ -2141,13 +2825,16 @@ elif st.session_state.active_phase == 3:
                 handle_error(e)
 
     if tc_data:
-        # Display is DERIVED from the structured data — always in sync with exports
-        all_md = tc_to_markdown(tc_data)
-        st.markdown(f"**{len(tc_data)} test cases**")
-        st.markdown(all_md)
+        # ── TC cards (accordion, sorted by priority) ──────────────────────────
+        render_tc_cards(tc_data)
+
+        # ── Summary stats ─────────────────────────────────────────────────────
+        render_tc_summary(tc_data)
+
+        # ── Export ────────────────────────────────────────────────────────────
         st.divider()
-        st.markdown("### 📥 Export")
-        st.caption("All formats are derived from the same structured data — always consistent, no extra LLM call.")
+        st.caption("All formats derive from the same structured data — always consistent.")
+        all_md = tc_to_markdown(tc_data)
         c1, c2, c3, c4 = st.columns(4)
         with c1:
             st.download_button("📝 Markdown", data=all_md, file_name="test_cases.md",
@@ -2161,7 +2848,7 @@ elif st.session_state.active_phase == 3:
         with c4:
             st.download_button("📊 CSV", data=build_csv(tc_data), file_name="test_cases.csv",
                                mime="text/csv", use_container_width=True)
-        with st.expander(f"👁️ Preview JSON ({len(tc_data)} test cases)", expanded=False):
+        with st.expander(f"👁️ Raw JSON ({len(tc_data)} test cases)", expanded=False):
             st.json(tc_data)
         render_testmo_export(tc_data)
     else:
