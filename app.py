@@ -716,9 +716,17 @@ def render_testmo_export(tc_data):
             min_value=0, value=0, key="testmo_folder_id",
         )
 
+        include_tags = st.checkbox(
+            "Include tags (technique + BR-x traceability)", value=True,
+            key="testmo_include_tags",
+            help="Tags are sanitized automatically. Uncheck only if your "
+                 "instance still rejects them (422 'invalid tag names').",
+        )
+
         # Step 3 — preview payload & push
         cases, notes = tme.tc_to_testmo_cases(tc_data, tpl,
-                                              folder_id or None)
+                                              folder_id or None,
+                                              include_tags=include_tags)
         for n in notes:
             st.info(f"ℹ️ {n}")
         with st.expander(f"👁️ Preview API payload ({len(cases)} cases)", expanded=False):

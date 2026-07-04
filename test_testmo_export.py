@@ -253,3 +253,60 @@ class TestNameTruncation:
         tpl = parse_template(TEMPLATE)
         cases, _ = tc_to_testmo_cases([tc], tpl)
         assert len(cases[0]["name"]) <= 255
+
+
+class TestUrlNormalization:
+    """Users paste whatever is in their browser bar — the client must cope."""
+
+    def test_full_page_url_reduced_to_root(self):
+        c = TestmoClient("https://alexazimann.testmo.net/repositories/1?group_id=1", "tok")
+        assert c.base == "https://alexazimann.testmo.net"
+
+    def test_missing_scheme_defaults_to_https(self):
+        c = TestmoClient("alexazimann.testmo.net", "tok")
+        assert c.base == "https://alexazimann.testmo.net"
+
+    def test_http_forced_to_https(self):
+        c = TestmoClient("http://acme.testmo.net/some/page", "tok")
+        assert c.base == "https://acme.testmo.net"
+
+    def test_trailing_slash_and_spaces(self):
+        c = TestmoClient("  https://acme.testmo.net/  ", "tok")
+        assert c.base == "https://acme.testmo.net"
+
+    def test_garbage_still_rejected(self):
+        with pytest.raises(ValueError):
+            TestmoClient("   ", "tok")
+
+
+from testmo_export import sanitize_tag
+
+
+class TestTagSanitization:
+    """French technique names caused 422 'invalid tag names' in production."""
+
+    def test_french_techniques(self):
+        assert sanitize_tag("Partition d'équivalence") == "Partition-d-equivalence"
+        assert sanitize_tag("Table de décision") == "Table-de-decision"
+        assert sanitize_tag("Cas d'erreur") == "Cas-d-erreur"
+
+    def test_acronyms_and_br_untouched(self):
+        assert sanitize_tag("BVA") == "BVA"
+        assert sanitize_tag("BR-1") == "BR-1"
+
+    def test_collapse_strip_and_cap(self):
+        assert sanitize_tag("  a  &  b  ") == "a-b"
+        assert len(sanitize_tag("x" * 200)) == 50
+        assert sanitize_tag("---") == ""
+
+    def test_tc_tags_sanitized_and_deduped(self):
+        tc = dict(TC_FULL, technique="Partition d'équivalence",
+                  covers=["BR-1", "br-1", "Règle métier 2"])
+        tpl = parse_template(TEMPLATE)
+        cases, _ = tc_to_testmo_cases([tc], tpl)
+        assert cases[0]["tags"] == ["Partition-d-equivalence", "BR-1", "Regle-metier-2"]
+
+    def test_include_tags_false(self):
+        tpl = parse_template(TEMPLATE)
+        cases, _ = tc_to_testmo_cases([TC_FULL], tpl, include_tags=False)
+        assert "tags" not in cases[0]

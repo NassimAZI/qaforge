@@ -76,15 +76,31 @@ def _tc_name(tc: dict) -> str:
     return f"{tc.get('id', 'TC-?')} — {tc.get('title', '')}".strip()[:255]
 
 
+def sanitize_tag(tag: str) -> str:
+    """Make a tag acceptable to Testmo's validator: French techniques like
+    "Partition d'équivalence" (spaces, apostrophes, accents) are rejected with
+    a 422 'invalid tag names'. Conservative charset: [A-Za-z0-9._-] only —
+    accents folded, everything else becomes a dash, capped at 50 chars."""
+    t = unicodedata.normalize("NFD", str(tag))
+    t = "".join(c for c in t if not unicodedata.combining(c))
+    t = re.sub(r"[^A-Za-z0-9._-]+", "-", t)
+    t = re.sub(r"-{2,}", "-", t).strip("-._")
+    return t[:50]
+
+
 def _tc_tags(tc: dict) -> list[str]:
-    """Technique + BR-x coverage as Testmo tags → filterable traceability."""
-    tags = []
+    """Technique + BR-x coverage as Testmo tags → filterable traceability.
+    All tags are sanitized (see sanitize_tag) and deduplicated."""
+    raw = []
     if tc.get("technique"):
-        tags.append(str(tc["technique"]).strip())
-    for c in tc.get("covers") or []:
-        c = str(c).strip()
-        if c and c not in tags:
-            tags.append(c)
+        raw.append(str(tc["technique"]))
+    raw.extend(str(c) for c in tc.get("covers") or [])
+    tags, seen = [], set()
+    for t in raw:
+        t = sanitize_tag(t)
+        if t and t.lower() not in seen:
+            seen.add(t.lower())
+            tags.append(t)
     return tags
 
 
@@ -191,7 +207,8 @@ def _find_text_key(text_keys: dict, *needles: str):
     return None
 
 
-def tc_to_testmo_cases(tcs: list[dict], tpl: dict, folder_id: int | None = None) -> tuple[list[dict], list[str]]:
+def tc_to_testmo_cases(tcs: list[dict], tpl: dict, folder_id: int | None = None,
+                       include_tags: bool = True) -> tuple[list[dict], list[str]]:
     """Transform QAForge structured test cases into Testmo API case objects.
 
     `tpl` is the dict returned by parse_template(). Only fields that exist in
@@ -217,7 +234,7 @@ def tc_to_testmo_cases(tcs: list[dict], tpl: dict, folder_id: int | None = None)
         if folder_id:
             case["folder_id"] = int(folder_id)
 
-        tags = _tc_tags(tc)
+        tags = _tc_tags(tc) if include_tags else []
         if tags:
             case["tags"] = tags
 
@@ -304,8 +321,22 @@ class TestmoClient:
 
     __test__ = False  # pytest: not a test class despite the 'Test' prefix
 
+    @staticmethod
+    def normalize_base_url(url: str) -> str:
+        """Users paste full page URLs from their browser
+        ('https://acme.testmo.net/repositories/1?group_id=1') — keep only
+        scheme://host, which is what /api/v1 hangs off. Missing scheme → https."""
+        from urllib.parse import urlsplit
+        u = url.strip()
+        if not u:
+            return ""
+        if "://" not in u:
+            u = "https://" + u
+        parts = urlsplit(u)
+        return f"https://{parts.netloc}" if parts.netloc else ""
+
     def __init__(self, base_url: str, token: str, timeout: float = 60.0):
-        self.base = base_url.strip().rstrip("/")
+        self.base = self.normalize_base_url(base_url)
         self._token = token.strip()
         self.timeout = timeout
         if not self.base or not self._token:
@@ -332,7 +363,18 @@ class TestmoClient:
                 raise Exception(f"Testmo API validation error (422): {r.text[:400]}")
             if r.status_code >= 400:
                 raise Exception(f"Testmo API {r.status_code} on {path}: {r.text[:400]}")
-            return r.json() if r.content else {}
+            if not r.content:
+                return {}
+            try:
+                return r.json()
+            except ValueError:
+                ct = r.headers.get("content-type", "?")
+                raise Exception(
+                    f"Testmo returned non-JSON ({ct}) for {self.base}/api/v1/{path} — "
+                    "this usually means the instance URL is wrong (use the ROOT, e.g. "
+                    "https://yourteam.testmo.net) or API access is disabled in the "
+                    "Testmo admin settings."
+                )
         raise Exception("Testmo API: rate limited (429) — retries exhausted.")
 
     # -- discovery ------------------------------------------------------------
