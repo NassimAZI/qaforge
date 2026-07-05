@@ -1407,7 +1407,7 @@ def _settings_dialog():
 
 # ── SIDEBAR ───────────────────────────────────────────────────────────────────
 with st.sidebar:
-    st.title("🧪 QAForge — AI Test Case Generator V.0.6")
+    st.title("🧪 QAForge — AI Test Case Generator V.0.8")
 
     if st.button("⚙ Settings", use_container_width=True, key="sidebar_settings_top"):
         _settings_dialog()
