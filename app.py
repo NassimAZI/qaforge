@@ -1315,18 +1315,25 @@ def render_tc_summary(tcs: list):
     if not tcs:
         return
     n = len(tcs)
+    opt = get_optional_fields()
     br_all = set()
     for tc in tcs:
         for br in (tc.get("covers") or []):
             br_all.add(br)
-    auto = sum(1 for tc in tcs if "good" in (tc.get("automation") or "").lower())
     est_min = n * 15
     est_str = f"~{est_min//60}h{est_min%60:02d}m" if est_min >= 60 else f"~{est_min}m"
+
+    if opt.get("automation", True):
+        auto = sum(1 for tc in tcs if "good" in (tc.get("automation") or "").lower())
+        auto_cell = f'<div class="qf-summary-cell"><div class="qf-summary-val">{auto}</div><div class="qf-summary-lbl">Automatable</div></div>'
+    else:
+        auto_cell = ""
+
     st.markdown(f"""
     <div class="qf-summary">
       <div class="qf-summary-cell"><div class="qf-summary-val">{n}</div><div class="qf-summary-lbl">Test cases</div></div>
       <div class="qf-summary-cell"><div class="qf-summary-val">{len(br_all)}</div><div class="qf-summary-lbl">BRs covered</div></div>
-      <div class="qf-summary-cell"><div class="qf-summary-val">{auto}</div><div class="qf-summary-lbl">Automatable</div></div>
+      {auto_cell}
       <div class="qf-summary-cell"><div class="qf-summary-val">{est_str}</div><div class="qf-summary-lbl">Manual run est.</div></div>
     </div>""", unsafe_allow_html=True)
 
@@ -2027,6 +2034,13 @@ def build_prompt_p3_gen() -> str:
         schema_lines.append('      ,"failure_signature": "what the tester sees on failure"')
 
     schema_str = "\n".join(schema_lines)
+
+    excluded = [k for k, v in fields.items() if not v]
+    excluded_note = (
+        f"\n- Do NOT include these disabled fields in any test case: {', '.join(excluded)}."
+        if excluded else ""
+    )
+
     return _PROMPT_P3_GEN_BASE + f"""
 ## OUTPUT FORMAT (STRICT JSON object — no markdown, no preamble)
 {{
@@ -2042,7 +2056,7 @@ def build_prompt_p3_gen() -> str:
 - Keep the EXACT `id`, `title`, `priority` and `covers` provided for each scenario.
 - Per-step "expected" is OPTIONAL: include it only when a step has an observable
   intermediate outcome (test-management tools like Squash TM / TestLink use it).
-- Do NOT add commentary, summaries, or extra keys.
+- Do NOT add commentary, summaries, or extra keys.{excluded_note}
 """
 
 
