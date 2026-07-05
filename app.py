@@ -2373,7 +2373,7 @@ def render_tab_bar():
 # ═════════════════════════════════════════════════════════════════════════════
 st.title("🧪 QAForge — AI Test Case Generator")
 
-if not api_key:
+if not api_key and st.session_state.get("active_phase") != "settings":
     st.warning(f"⚠️ Enter your {provider} API key in the sidebar.")
     st.stop()
 
