@@ -1182,13 +1182,15 @@ def render_tc_cards(tcs: list):
         expected = _html.escape(str(tc.get("expected_result", "") or ""))
         failure  = _html.escape(str(tc.get("failure_signature", "") or ""))
 
+        # Header pills: prio + technique only (BR-x moved to body)
         pills_str = prio_pill(prio)
         if opt.get("technique", True) and tech:
             pills_str += pill(tech)
         if opt.get("automation", True):
             pills_str += auto_pill(auto)
-        for br in covers:
-            pills_str += pill(br, "br")
+
+        # Covers chips (moved from header to body)
+        covers_str = "".join(f'<span class="br-chip">{_html.escape(str(br))}</span>' for br in covers) or "—"
 
         pre_section = ""
         if opt.get("preconditions", True):
@@ -1206,7 +1208,8 @@ def render_tc_cards(tcs: list):
             else:
                 act = _html.escape(str(s))
                 exp = ""
-            step_rows += f"<tr><td>{i+1}</td><td>{act}</td><td class='exp'>{exp}</td></tr>"
+            exp_cell = f'<td class="exp-cell"><span class="exp-arrow">→</span> {exp}</td>' if exp else '<td class="exp-cell"></td>'
+            step_rows += f"<tr><td class='step-num'>{i+1}</td><td>{act}</td>{exp_cell}</tr>"
         if not step_rows:
             step_rows = "<tr><td colspan='3' style='color:#484f58;font-style:italic;'>No steps defined</td></tr>"
 
@@ -1224,16 +1227,20 @@ def render_tc_cards(tcs: list):
           </div>
           <div class="card-body">
             {pre_section}
-            <div class="sect">
+            <div class="sect full">
               <div class="sect-lbl">Expected Result</div>
               <div class="result-box">{expected or "—"}</div>
             </div>
             <div class="sect full">
               <div class="sect-lbl">Steps</div>
-              <table><thead><tr><th>#</th><th>Action</th><th>Intermediate Expected</th></tr></thead>
+              <table><thead><tr><th>#</th><th>Action</th><th>Expected</th></tr></thead>
               <tbody>{step_rows}</tbody></table>
             </div>
             {failure_section}
+            <div class="sect full covers-row">
+              <div class="sect-lbl">Covers</div>
+              <div class="covers-chips">{covers_str}</div>
+            </div>
           </div>
         </div>""")
 
@@ -1257,7 +1264,7 @@ def render_tc_cards(tcs: list):
 *{{box-sizing:border-box;margin:0;padding:0}}
 body{{background:#0d1117;color:#e6edf3;font-family:'Inter',sans-serif;font-size:13px;padding:4px 0}}
 .filter-bar{{display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding:4px 0 10px}}
-.flbl{{font-family:'JetBrains Mono',monospace;font-size:9px;text-transform:uppercase;letter-spacing:.12em;color:#484f58;margin-right:4px}}
+.flbl{{font-family:'JetBrains Mono',monospace;font-size:9px;text-transform:uppercase;letter-spacing:.12em;color:#8b949e;margin-right:4px}}
 .fchip{{font-family:'JetBrains Mono',monospace;font-size:10px;padding:3px 8px;border-radius:5px;border:1px solid #30363d;color:#8b949e;cursor:default}}
 .card{{background:#161b22;border:1px solid #21262d;border-radius:10px;margin-bottom:6px;overflow:hidden;transition:border-color .14s}}
 .card:hover{{border-color:#30363d}}
@@ -1272,21 +1279,24 @@ body{{background:#0d1117;color:#e6edf3;font-family:'Inter',sans-serif;font-size:
 .pill.prio-lo{{border-color:#10b981;color:#10b981;background:rgba(16,185,129,.1)}}
 .pill.auto{{border-color:#10b981;color:#10b981;background:rgba(16,185,129,.1)}}
 .pill.manual{{border-color:#30363d;color:#484f58}}
-.pill.br{{border-color:#30363d;color:#8b949e}}
 .chev{{font-size:9px;color:#484f58;transition:transform .2s;flex-shrink:0}}
 .card-body{{display:none;border-top:1px solid #21262d;padding:16px;grid-template-columns:1fr 1fr;gap:16px}}
 .card-body.open{{display:grid}}
 .sect{{display:flex;flex-direction:column;gap:6px}}
 .sect.full{{grid-column:1/-1}}
-.sect-lbl{{font-family:'JetBrains Mono',monospace;font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:#484f58}}
+.covers-row{{grid-column:1/-1;margin-top:4px}}
+.sect-lbl{{font-family:'JetBrains Mono',monospace;font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:#8b949e}}
 .pre-text{{font-size:12px;color:#8b949e;line-height:1.7}}
-.result-box{{background:#0d1117;border:1px solid #21262d;border-radius:6px;padding:10px 12px;font-size:12px;color:#8b949e;line-height:1.6}}
+.result-box{{background:#0d1117;border-left:3px solid #10b981;border-radius:0 6px 6px 0;padding:10px 14px;font-size:12px;color:#e6edf3;line-height:1.6}}
 .fail-box{{background:rgba(239,68,68,.05);border:1px solid rgba(239,68,68,.18);border-radius:6px;padding:10px 12px;font-size:11px;font-family:'JetBrains Mono',monospace;color:rgba(239,68,68,.75);line-height:1.6}}
+.covers-chips{{display:flex;gap:6px;flex-wrap:wrap;margin-top:2px}}
+.br-chip{{font-family:'JetBrains Mono',monospace;font-size:10px;padding:2px 8px;border-radius:4px;background:#1c2128;border:1px solid #30363d;color:#8b949e}}
 table{{width:100%;border-collapse:collapse;font-size:12px}}
-th{{font-family:'JetBrains Mono',monospace;font-size:9px;text-transform:uppercase;letter-spacing:.1em;color:#484f58;text-align:left;padding:0 8px 6px 0;border-bottom:1px solid #21262d}}
+th{{font-family:'JetBrains Mono',monospace;font-size:9px;text-transform:uppercase;letter-spacing:.1em;color:#8b949e;text-align:left;padding:0 8px 6px 0;border-bottom:1px solid #21262d}}
 td{{padding:6px 8px 6px 0;border-bottom:1px solid #21262d;vertical-align:top;color:#e6edf3;line-height:1.5}}
-td:first-child{{font-family:'JetBrains Mono',monospace;font-size:10px;color:#484f58;width:24px}}
-td.exp{{color:#8b949e;font-style:italic}}
+td.step-num{{font-family:'JetBrains Mono',monospace;font-size:10px;color:#484f58;width:24px}}
+td.exp-cell{{color:#58a6ff;font-size:11px;width:38%}}
+.exp-arrow{{color:#30363d;margin-right:4px}}
 tr:last-child td{{border-bottom:none}}
 </style></head><body>
 {filter_bar}
