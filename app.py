@@ -1389,6 +1389,16 @@ with st.sidebar:
             st.caption(f"Scenarios: {_n_scenarios} · TCs: {_n_tcs if _n_tcs else '—'}")
 
     st.divider()
+    _is_settings = st.session_state.get("active_phase") == "settings"
+    if st.button("⚙ Settings", use_container_width=True,
+                 type="primary" if _is_settings else "secondary"):
+        if _is_settings:
+            st.session_state.active_phase = st.session_state.get("_prev_active_phase", 1)
+        else:
+            st.session_state._prev_active_phase = st.session_state.get("active_phase", 1)
+            st.session_state.active_phase = "settings"
+        st.rerun()
+
     if st.button("🔄 New Session", use_container_width=True):
         st.session_state["_confirm_new_session"] = True
         st.rerun()
@@ -2344,7 +2354,7 @@ def render_tab_bar():
         2: ("Test Checklist", HELP_TEXTS["phase2"],     HELP_TEXTS["phase2_locked"]),
         3: ("Test Cases",    HELP_TEXTS["phase3"],      HELP_TEXTS["phase2_locked"]),
     }
-    cols = st.columns([1, 1, 1, 0.55])
+    cols = st.columns(3)
     for i, (n, (label, help_active, help_locked)) in enumerate(phase_meta.items()):
         with cols[i]:
             if n > pr:
@@ -2358,17 +2368,6 @@ def render_tab_bar():
                               help=help_active):
                     st.session_state.active_phase = n
                     st.rerun()
-    with cols[3]:
-        is_settings = ap == "settings"
-        if st.button("⚙ Settings", key="tab_settings", use_container_width=True,
-                     type="primary" if is_settings else "secondary"):
-            if is_settings:
-                # Go back to previous phase
-                st.session_state.active_phase = st.session_state.get("_prev_active_phase", 1)
-            else:
-                st.session_state._prev_active_phase = ap
-                st.session_state.active_phase = "settings"
-            st.rerun()
 
 # ═════════════════════════════════════════════════════════════════════════════
 st.title("🧪 QAForge — AI Test Case Generator")
