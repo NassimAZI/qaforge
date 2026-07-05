@@ -6,15 +6,17 @@ All ideas collected across sessions. Each item notes why it's useful and roughly
 
 ## UX / Navigation
 
-| Idea | Why | Effort |
-|------|-----|--------|
-| **Back navigation between phases** | User can't correct their user story after seeing the plan without starting a new session | Medium |
-| **Phase 2 inline edit of scenario titles** | Currently requires typing in chat — direct edit would be faster | Medium |
-| **Keyboard shortcut to submit (Ctrl+Enter)** | Power users expect it on textarea inputs | Low |
-| **Collapse all / expand all TC cards** | Useful when reviewing 15+ TCs at once | Low |
-| **Filter TC cards by priority / technique (interactive)** | Filter bar is currently display-only — clicking should actually filter | Medium |
-| **Drag-and-drop reordering of scenarios in Phase 2** | Priority ordering by drag is faster than typing chat commands | High |
-| **Session persistence across page reloads** | `localStorage` is disabled in Streamlit Cloud iframes — lose everything on refresh | High (needs backend or URL state) |
+| Idea | Why | Effort | Status |
+|------|-----|--------|--------|
+| **Back navigation between phases** | User can't correct their user story after seeing the plan without starting a new session | Medium | — |
+| **Phase 2 inline edit of scenario titles** | Currently requires typing in chat — direct edit would be faster | Medium | — |
+| **Keyboard shortcut to submit (Ctrl+Enter)** | Power users expect it on textarea inputs | Low | — |
+| **Collapse all / expand all TC cards** | Useful when reviewing 15+ TCs at once | Low | — |
+| **Filter TC cards by priority / technique (interactive)** | Filter bar is currently display-only — clicking should actually filter | Medium | — |
+| **Drag-and-drop reordering of scenarios in Phase 2** | Priority ordering by drag is faster than typing chat commands | High | — |
+| **Session persistence across page reloads** | `localStorage` is disabled in Streamlit Cloud iframes — lose everything on refresh | High (needs backend or URL state) | — |
+| **Settings modal (⚙ sidebar)** | Company context + configurable output schema (priorities, optional fields) — session-only, no file writes | Medium | ✅ Done |
+| **TC card layout redesign** | BR-x chips moved to Covers section in card body, Expected Result full-width, result-box green border, exp-cell blue color for intermediate steps | Low | ✅ Done |
 
 ---
 
@@ -34,14 +36,17 @@ All ideas collected across sessions. Each item notes why it's useful and roughly
 
 ## Generation
 
-| Idea | Why | Effort |
-|------|-----|--------|
-| **Configurable batch size** | Advanced users on paid API tiers could increase batch size above 6 to speed up Phase 3 | Low |
-| **Pre-generation review in Phase 2** | ✅ Already done — AI checks for uncovered BRs, priority gaps, duplicates before generating | Done |
-| **Streaming output for Phase 1** | Display questions as they stream instead of waiting for the full JSON | High (Streamlit streaming + partial JSON parsing) |
-| **Alternative scenario suggestions** | After Phase 2, offer 3 alternative angles the user might not have considered | Medium |
-| **Scenario deduplication assistant** | AI proposes which overlapping scenarios to merge, user approves | Medium |
-| **Multi-session comparison** | Compare two test suites generated from different user stories for the same feature | High |
+| Idea | Why | Effort | Status |
+|------|-----|--------|--------|
+| **Configurable batch size** | Advanced users on paid API tiers could increase batch size above 6 to speed up Phase 3 | Low | — |
+| **Pre-generation review in Phase 2** | AI checks for uncovered BRs, priority gaps, duplicates before generating | — | ✅ Done |
+| **Dynamic priorities** | Priority labels/emojis fully configurable — cascade through P2 buttons, prompts, pills, Testmo export | Low | ✅ Done |
+| **Optional TC fields** | technique, type, automation, preconditions, failure_signature toggleable — omitted from prompts, cards, exports | Low | ✅ Done |
+| **Company context injection** | context.md loaded at startup, injected into P1/P2/P3 prompts, stripped of comment lines | Low | ✅ Done |
+| **Streaming output for Phase 1** | Display questions as they stream instead of waiting for the full JSON | High (Streamlit streaming + partial JSON parsing) | — |
+| **Alternative scenario suggestions** | After Phase 2, offer 3 alternative angles the user might not have considered | Medium | — |
+| **Scenario deduplication assistant** | AI proposes which overlapping scenarios to merge, user approves | Medium | — |
+| **Multi-session comparison** | Compare two test suites generated from different user stories for the same feature | High | — |
 
 ---
 
