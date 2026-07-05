@@ -1061,8 +1061,7 @@ hr { border-color: var(--border) !important; margin: 12px 0 !important; }
 
 def render_stepper():
     """Graduation-ruler stepper rendered via components.html (bypass Streamlit sanitizer)."""
-    raw_phase = st.session_state.get("active_phase", 1)
-    phase = st.session_state.get("_prev_active_phase", 1) if raw_phase == "settings" else raw_phase
+    phase = st.session_state.get("active_phase", 1)
     reached = st.session_state.get("phase_reached", 1)
 
     def _cls(p):
@@ -1332,19 +1331,69 @@ def render_tc_summary(tcs: list):
     </div>""", unsafe_allow_html=True)
 
 
+@st.dialog("⚙ Settings", width="large")
+def _settings_dialog():
+    st.caption("Changes apply to this session only. Edit the source files (`context.md`, `output_schema.json`) for permanent changes.")
+
+    st.markdown("### 📋 Company Context")
+    st.caption("Injected into AI prompts (Phase 1, Phase 2 plan, Phase 3 generation) to ground test generation in your domain.")
+    ctx_val = st.text_area(
+        "Company context",
+        value=st.session_state.settings_company_context,
+        height=200,
+        placeholder="Describe your company domain, vocabulary, abbreviations, global business rules…",
+        label_visibility="collapsed",
+    )
+    col_ctx_apply, col_ctx_reset, _ = st.columns([1, 1, 4])
+    with col_ctx_apply:
+        if st.button("✅ Apply", key="ctx_apply", use_container_width=True, type="primary"):
+            st.session_state.settings_company_context = ctx_val
+            st.success("Context updated for this session.")
+    with col_ctx_reset:
+        if st.button("↩ Reset", key="ctx_reset", use_container_width=True):
+            st.session_state.settings_company_context = _load_context_file()
+            st.rerun()
+
+    st.divider()
+
+    st.markdown("### 🗂️ Output Schema")
+    st.caption("Controls priorities (Phase 2 buttons) and TC fields generated in Phase 3.")
+    schema_raw = st.text_area(
+        "Output schema (JSON)",
+        value=json.dumps(st.session_state.settings_output_schema, indent=2, ensure_ascii=False),
+        height=260,
+        label_visibility="collapsed",
+    )
+    col_schema_apply, col_schema_reset, col_schema_info = st.columns([1, 1, 4])
+    with col_schema_apply:
+        if st.button("✅ Apply", key="schema_apply", use_container_width=True, type="primary"):
+            try:
+                parsed_schema = json.loads(schema_raw)
+                if "priorities" not in parsed_schema or not isinstance(parsed_schema["priorities"], list):
+                    st.error("❌ `priorities` must be a non-empty list.")
+                elif len(parsed_schema["priorities"]) == 0:
+                    st.error("❌ At least one priority is required.")
+                elif "optional_fields" not in parsed_schema or not isinstance(parsed_schema.get("optional_fields"), dict):
+                    st.error("❌ `optional_fields` must be a dict.")
+                else:
+                    st.session_state.settings_output_schema = parsed_schema
+                    st.success("Schema updated for this session.")
+            except json.JSONDecodeError as e:
+                st.error(f"❌ Invalid JSON: {e}")
+    with col_schema_reset:
+        if st.button("↩ Reset", key="schema_reset", use_container_width=True):
+            st.session_state.settings_output_schema = _load_schema_file()
+            st.rerun()
+    with col_schema_info:
+        st.caption("**priorities**: `{label, emoji}` list — order = Phase 2 button order. **optional_fields**: `false` removes field from generation and exports.")
+
+
 # ── SIDEBAR ───────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.title("🧪 QAForge — AI Test Case Generator V.0.6")
 
-    _is_settings = st.session_state.get("active_phase") == "settings"
-    if st.button("⚙ Settings", use_container_width=True, key="sidebar_settings_top",
-                 type="primary" if _is_settings else "secondary"):
-        if _is_settings:
-            st.session_state.active_phase = st.session_state.get("_prev_active_phase", 1)
-        else:
-            st.session_state._prev_active_phase = st.session_state.get("active_phase", 1)
-            st.session_state.active_phase = "settings"
-        st.rerun()
+    if st.button("⚙ Settings", use_container_width=True, key="sidebar_settings_top"):
+        _settings_dialog()
 
     st.divider()
     provider = st.radio("LLM Provider", list(PROVIDER_DEFAULTS.keys()), horizontal=True)
@@ -1389,7 +1438,7 @@ with st.sidebar:
     if st.session_state.get("us_submitted") or _reached > 1:
         st.divider()
         st.markdown("**📍 Current session**")
-        _phase_labels = {1: "Phase 1 — Analysis", 2: "Phase 2 — Plan", 3: "Phase 3 — Test Cases", "settings": "⚙ Settings"}
+        _phase_labels = {1: "Phase 1 — Analysis", 2: "Phase 2 — Plan", 3: "Phase 3 — Test Cases"}
         st.caption(f"Active: {_phase_labels.get(_phase, '—')}")
         if st.session_state.get("p1_user_story"):
             _preview = st.session_state.p1_user_story[:60].replace("\n", " ")
@@ -1574,7 +1623,6 @@ defaults = {
     # Settings — loaded from files, editable per session
     "settings_company_context": None,
     "settings_output_schema": None,
-    "_prev_active_phase": 1,
 }
 for k, v in defaults.items():
     if k not in st.session_state:
@@ -2373,7 +2421,7 @@ def render_tab_bar():
 # ═════════════════════════════════════════════════════════════════════════════
 st.title("🧪 QAForge — AI Test Case Generator")
 
-if not api_key and st.session_state.get("active_phase") != "settings":
+if not api_key:
     st.warning(f"⚠️ Enter your {provider} API key in the sidebar.")
     st.stop()
 
@@ -3088,64 +3136,3 @@ elif st.session_state.active_phase == 3:
 # ═════════════════════════════════════════════════════════════════════════════
 #  SETTINGS PAGE
 # ═════════════════════════════════════════════════════════════════════════════
-elif st.session_state.active_phase == "settings":
-    st.markdown('<div class="badge b1">⚙️ Settings — Session Configuration</div>', unsafe_allow_html=True)
-    st.caption("Changes apply to this session only. Edit the source files (`context.md`, `output_schema.json`) for permanent changes.")
-
-    # ── Section 1: Company Context ────────────────────────────────────────────
-    st.markdown("### 📋 Company Context")
-    st.caption("Injected into AI prompts (Phase 1 analysis, Phase 1 chat, Phase 2 plan generation, Phase 3 test case generation) to ground test generation in your domain.")
-
-    ctx_val = st.text_area(
-        "Company context",
-        value=st.session_state.settings_company_context,
-        height=220,
-        placeholder="Describe your company domain, vocabulary, abbreviations, global business rules…",
-        label_visibility="collapsed",
-    )
-    col_ctx_apply, col_ctx_reset, _ = st.columns([1, 1, 4])
-    with col_ctx_apply:
-        if st.button("✅ Apply", key="ctx_apply", use_container_width=True, type="primary"):
-            st.session_state.settings_company_context = ctx_val
-            st.success("Context updated for this session.")
-    with col_ctx_reset:
-        if st.button("↩ Reset", key="ctx_reset", use_container_width=True):
-            st.session_state.settings_company_context = _load_context_file()
-            st.rerun()
-
-    st.divider()
-
-    # ── Section 2: Output Schema ──────────────────────────────────────────────
-    st.markdown("### 🗂️ Output Schema")
-    st.caption("Controls the priorities available in Phase 2 and the fields generated in Phase 3. Edit the JSON below.")
-
-    schema_raw = st.text_area(
-        "Output schema (JSON)",
-        value=json.dumps(st.session_state.settings_output_schema, indent=2, ensure_ascii=False),
-        height=280,
-        label_visibility="collapsed",
-    )
-
-    col_schema_apply, col_schema_reset, col_schema_info = st.columns([1, 1, 4])
-    with col_schema_apply:
-        if st.button("✅ Apply", key="schema_apply", use_container_width=True, type="primary"):
-            try:
-                parsed_schema = json.loads(schema_raw)
-                # Validate minimal structure
-                if "priorities" not in parsed_schema or not isinstance(parsed_schema["priorities"], list):
-                    st.error("❌ `priorities` must be a non-empty list.")
-                elif len(parsed_schema["priorities"]) == 0:
-                    st.error("❌ At least one priority is required.")
-                elif "optional_fields" not in parsed_schema or not isinstance(parsed_schema.get("optional_fields"), dict):
-                    st.error("❌ `optional_fields` must be a dict.")
-                else:
-                    st.session_state.settings_output_schema = parsed_schema
-                    st.success("Schema updated for this session.")
-            except json.JSONDecodeError as e:
-                st.error(f"❌ Invalid JSON: {e}")
-    with col_schema_reset:
-        if st.button("↩ Reset", key="schema_reset", use_container_width=True):
-            st.session_state.settings_output_schema = _load_schema_file()
-            st.rerun()
-    with col_schema_info:
-        st.caption("**priorities**: list of `{label, emoji}` — order defines Phase 2 button order. **optional_fields**: set to `false` to remove a field from generation and exports.")
