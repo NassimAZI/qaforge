@@ -1791,7 +1791,7 @@ Rules:
 - If all critical questions are answered, say so in "reply": the user can proceed to Phase 2.
 """
 
-PROMPT_P2 = """
+_PROMPT_P2_BASE = """
 You are a Lead QA Engineer specialising in test design using ISO/IEC/IEEE 29119-4
 and experience-based techniques.
 
@@ -1832,32 +1832,8 @@ Prefix each title with its technique abbreviation:
 - "ET — Navigate through checkout by skipping optional steps in random order"
 - Happy Path and Alternate Flow titles: no prefix needed.
 
-## OUTPUT FORMAT (STRICT JSON — no markdown, no explanation)
-{
-  "summary": "2-3 sentence feature summary highlighting testing strategy and techniques applied",
-  "scenarios": [
-    {"id": 1, "title": "Successful login with valid credentials", "category": "Happy Path", "priority": "Very High", "covers": ["BR-1"]},
-    {"id": 2, "title": "BVA — Login with password length at boundaries (7, 8, 128, 129 chars)", "category": "BVA", "priority": "High", "covers": ["BR-1"]},
-    {"id": 3, "title": "DT — Premium user with active subscription accesses restricted content", "category": "Decision Table", "priority": "Very High", "covers": ["BR-2", "BR-3"]}
-  ],
-  "coverage_check": [
-    {"rule": "BR-1", "covered_by": [1, 2]},
-    {"rule": "BR-2", "covered_by": [3]},
-    {"rule": "BR-3", "covered_by": [3]}
-  ],
-  "potential_overlaps": [[2, 5]]
-}
-
-"coverage_check" comes AFTER "scenarios" on purpose: fill it by RE-READING your own
-scenario list rule by rule. If a rule has an empty "covered_by", go back and add a scenario.
-"potential_overlaps": pairs of scenario ids that may test the same thing — flag them
-honestly so the human reviewer can consolidate (empty array if none).
-
 ## CATEGORIES (use exactly these values):
 Happy Path | Alternate Flow | BVA | Equivalence | Decision Table | State Transition | Negative | Edge Case | Security | Non-Functional | Function Combination | Error Guessing
-
-## PRIORITIES (use exactly these values):
-Very High | High | Medium | Low
 
 ## HARD CONSTRAINTS — in priority order (if constraints conflict, the higher one wins)
 0. USER OVERRIDE: if the user explicitly requests a specific number or maximum of
@@ -1875,31 +1851,73 @@ Very High | High | Medium | Low
 - Write all text fields (summary, scenario titles) in the SAME LANGUAGE as the User Story.
 """
 
-# Few-shot example appended ONLY for smaller models (Groq / Mistral / OpenRouter).
-# Evidence: few-shot stabilises weaker models but can anchor and degrade strong ones
-# (zero-shot outperformed few-shot for GPT-4 on industrial user stories) — so
-# Gemini / OpenAI stay zero-shot.
-PROMPT_P2_FEWSHOT = """
+
+def build_prompt_p2() -> str:
+    """Build PROMPT_P2 dynamically with the configured priority labels."""
+    priorities = get_priorities()
+    prio_values = " | ".join(p["label"] for p in priorities)
+    first_prio = priorities[0]["label"] if priorities else "High"
+    second_prio = priorities[1]["label"] if len(priorities) > 1 else first_prio
+    third_prio = priorities[2]["label"] if len(priorities) > 2 else second_prio
+
+    return _PROMPT_P2_BASE + f"""
+## OUTPUT FORMAT (STRICT JSON — no markdown, no explanation)
+{{
+  "summary": "2-3 sentence feature summary highlighting testing strategy and techniques applied",
+  "scenarios": [
+    {{"id": 1, "title": "Successful login with valid credentials", "category": "Happy Path", "priority": "{first_prio}", "covers": ["BR-1"]}},
+    {{"id": 2, "title": "BVA — Login with password length at boundaries (7, 8, 128, 129 chars)", "category": "BVA", "priority": "{second_prio}", "covers": ["BR-1"]}},
+    {{"id": 3, "title": "DT — Premium user with active subscription accesses restricted content", "category": "Decision Table", "priority": "{first_prio}", "covers": ["BR-2", "BR-3"]}}
+  ],
+  "coverage_check": [
+    {{"rule": "BR-1", "covered_by": [1, 2]}},
+    {{"rule": "BR-2", "covered_by": [3]}},
+    {{"rule": "BR-3", "covered_by": [3]}}
+  ],
+  "potential_overlaps": [[2, 5]]
+}}
+
+"coverage_check" comes AFTER "scenarios" on purpose: fill it by RE-READING your own
+scenario list rule by rule. If a rule has an empty "covered_by", go back and add a scenario.
+"potential_overlaps": pairs of scenario ids that may test the same thing — flag them
+honestly so the human reviewer can consolidate (empty array if none).
+
+## PRIORITIES (use EXACTLY these values — no others):
+{prio_values}
+"""
+
+
+def build_prompt_p2_fewshot() -> str:
+    """Few-shot example with dynamic priority labels."""
+    priorities = get_priorities()
+    first_prio = priorities[0]["label"] if priorities else "High"
+    second_prio = priorities[1]["label"] if len(priorities) > 1 else first_prio
+    third_prio = priorities[2]["label"] if len(priorities) > 2 else second_prio
+
+    return f"""
 
 ## EXAMPLE (illustrative only — adapt to the actual feature, do NOT copy)
 Input: "As a user, I want to reset my password via an emailed link valid 24h.
 BR-1: link expires after 24h. BR-2: new password must be 8–128 chars."
 Output:
-{
+{{
   "summary": "Password reset via emailed time-limited link; coverage focuses on link lifecycle (ST), password constraints (BVA) and failure handling (EG).",
   "scenarios": [
-    {"id": 1, "title": "Successful password reset via valid emailed link", "category": "Happy Path", "priority": "Very High", "covers": ["BR-1"]},
-    {"id": 2, "title": "ST — Reset link transitions from valid to expired after 24h", "category": "State Transition", "priority": "High", "covers": ["BR-1"]},
-    {"id": 3, "title": "BVA — New password length at boundaries (7, 8, 128, 129 chars)", "category": "BVA", "priority": "High", "covers": ["BR-2"]},
-    {"id": 4, "title": "EG — Submit reset form with empty password fields", "category": "Error Guessing", "priority": "Medium", "covers": ["BR-2"]}
+    {{"id": 1, "title": "Successful password reset via valid emailed link", "category": "Happy Path", "priority": "{first_prio}", "covers": ["BR-1"]}},
+    {{"id": 2, "title": "ST — Reset link transitions from valid to expired after 24h", "category": "State Transition", "priority": "{second_prio}", "covers": ["BR-1"]}},
+    {{"id": 3, "title": "BVA — New password length at boundaries (7, 8, 128, 129 chars)", "category": "BVA", "priority": "{second_prio}", "covers": ["BR-2"]}},
+    {{"id": 4, "title": "EG — Submit reset form with empty password fields", "category": "Error Guessing", "priority": "{third_prio}", "covers": ["BR-2"]}}
   ],
   "coverage_check": [
-    {"rule": "BR-1", "covered_by": [1, 2]},
-    {"rule": "BR-2", "covered_by": [3, 4]}
+    {{"rule": "BR-1", "covered_by": [1, 2]}},
+    {{"rule": "BR-2", "covered_by": [3, 4]}}
   ],
   "potential_overlaps": []
-}
+}}
 """
+
+
+PROMPT_P2 = _PROMPT_P2_BASE  # kept for reference; use build_prompt_p2() at call sites
 
 # Self-Refine pattern (generate → critique → refine) reusing the diff machinery:
 # the model reviews ITS OWN plan against the business rules and returns operations.
@@ -1927,19 +1945,11 @@ say so in "reply" and return empty arrays. Do NOT inflate the plan.
 }
 """
 
-PROMPT_P2_MODIFY = """
+_PROMPT_P2_MODIFY_BASE = """
 You are a Lead QA Engineer maintaining a test checklist that a human is reviewing.
 You receive the CURRENT scenario list (JSON) and a modification request from the user.
 Return ONLY the operations needed — do NOT regenerate the whole plan. The human's
 review work (selections, priorities) on untouched scenarios must survive your changes.
-
-## OUTPUT FORMAT (STRICT JSON object — no markdown, no preamble)
-{
-  "reply": "1-2 sentence summary of what you changed (same language as the user)",
-  "add": [{"title": "EG — …", "category": "Error Guessing", "priority": "Medium", "covers": ["BR-2"]}],
-  "remove": [4, 7],
-  "modify": [{"id": 2, "priority": "Very High"}]
-}
 
 Rules:
 - "add": new scenarios WITHOUT id (ids are assigned by the system). Use the same title
@@ -1947,17 +1957,35 @@ Rules:
   "covers" (BR-x ids) conventions as the existing plan.
 - "remove": ids of scenarios to delete.
 - "modify": only the id plus the fields that change (title, category, priority, covers).
-- A user COUNT request ("keep only 10", "réduis à 8") is a REMOVE operation: put the
+- A user COUNT request ("keep only 10", "reduis a 8") is a REMOVE operation: put the
   ids of ALL scenarios beyond the requested count in "remove" — keep the most critical
-  ones (priority + rule coverage). Verify: current count − removed = requested count.
+  ones (priority + rule coverage). Verify: current count minus removed = requested count.
   The user's count beats coverage and technique completeness.
 - Untouched scenarios must NOT appear anywhere in your output.
 - Use empty arrays when nothing applies. If the user only asks a question, answer in
   "reply" and leave the three arrays empty.
 - If the request is AMBIGUOUS or too vague to translate into precise operations
   (e.g. "improve the plan"), do NOT guess: ask a clarifying question in "reply"
-  and leave the three arrays empty.
+  and leave the three arrays empty."""
+
+
+def build_prompt_p2_modify() -> str:
+    priorities = get_priorities()
+    third_prio = priorities[2]["label"] if len(priorities) > 2 else priorities[-1]["label"]
+    first_prio = priorities[0]["label"]
+    return _PROMPT_P2_MODIFY_BASE + f"""
+
+## OUTPUT FORMAT (STRICT JSON object — no markdown, no preamble)
+{{
+  "reply": "1-2 sentence summary of what you changed (same language as the user)",
+  "add": [{{"title": "EG — ...", "category": "Error Guessing", "priority": "{third_prio}", "covers": ["BR-2"]}}],
+  "remove": [4, 7],
+  "modify": [{{"id": 2, "priority": "{first_prio}"}}]
+}}
 """
+
+
+PROMPT_P2_MODIFY = _PROMPT_P2_MODIFY_BASE  # kept for reference; use build_prompt_p2_modify() at call sites
 
 _PROMPT_P3_GEN_BASE = """
 You are a Senior QA Test Architect writing execution-ready test cases aligned with
@@ -2097,7 +2125,7 @@ HELP_TEXTS = {
         "  • Each test case contains:\n"
         "      Technique  : test design method used (BVA, DT, ST, EP, FC, EG…)\n"
         "      Type       : Happy Path / Negative / Edge Case / Security…\n"
-        "      Priority   : Very High / High / Medium / Low\n"
+        "      Priority   : configured in Settings (output schema)\n"
         "      Automation : Good candidate ✅ or Manual only 🖐️\n"
         "      Steps      : numbered actions with real test data\n"
         "      Expected Result & Failure Signature\n"
@@ -2811,8 +2839,8 @@ if st.session_state.active_phase == 1:
                 f"Generate the test plan (titles only)."
             )
             # Few-shot ONLY for smaller models — strong models perform better zero-shot
-            p2_prompt = PROMPT_P2 + (
-                PROMPT_P2_FEWSHOT if st.session_state.provider in ("Groq", "Mistral", "OpenRouter") else ""
+            p2_prompt = build_prompt_p2() + (
+                build_prompt_p2_fewshot() if st.session_state.provider in ("Groq", "Mistral", "OpenRouter") else ""
             )
             with st.spinner("📋 Generating test plan…"):
                 try:
@@ -2984,7 +3012,7 @@ elif st.session_state.active_phase == 2:
                     f"CONTEXT:\n{build_compact_context(max_chars=3000)}\n\n"
                     f"USER REQUEST:\n{reply2}"
                 )
-                ops = call_llm_json(PROMPT_P2_MODIFY, msg, max_tokens=4000)
+                ops = call_llm_json(build_prompt_p2_modify(), msg, max_tokens=4000)
                 new_scenarios, new_review = apply_scenario_ops(
                     scenarios, st.session_state.p2_review, ops
                 )
