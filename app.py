@@ -1336,6 +1336,17 @@ def render_tc_summary(tcs: list):
 with st.sidebar:
     st.title("🧪 QAForge — AI Test Case Generator V.0.6")
 
+    _is_settings = st.session_state.get("active_phase") == "settings"
+    if st.button("⚙ Settings", use_container_width=True, key="sidebar_settings_top",
+                 type="primary" if _is_settings else "secondary"):
+        if _is_settings:
+            st.session_state.active_phase = st.session_state.get("_prev_active_phase", 1)
+        else:
+            st.session_state._prev_active_phase = st.session_state.get("active_phase", 1)
+            st.session_state.active_phase = "settings"
+        st.rerun()
+
+    st.divider()
     provider = st.radio("LLM Provider", list(PROVIDER_DEFAULTS.keys()), horizontal=True)
     cfg = PROVIDER_DEFAULTS[provider]
 
@@ -1389,16 +1400,6 @@ with st.sidebar:
             st.caption(f"Scenarios: {_n_scenarios} · TCs: {_n_tcs if _n_tcs else '—'}")
 
     st.divider()
-    _is_settings = st.session_state.get("active_phase") == "settings"
-    if st.button("⚙ Settings", use_container_width=True,
-                 type="primary" if _is_settings else "secondary"):
-        if _is_settings:
-            st.session_state.active_phase = st.session_state.get("_prev_active_phase", 1)
-        else:
-            st.session_state._prev_active_phase = st.session_state.get("active_phase", 1)
-            st.session_state.active_phase = "settings"
-        st.rerun()
-
     if st.button("🔄 New Session", use_container_width=True):
         st.session_state["_confirm_new_session"] = True
         st.rerun()
