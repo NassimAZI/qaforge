@@ -1,6 +1,6 @@
 # 🧪 QAForge — AI Test Case Generator
 
-**Version 0.7**
+**Version 0.8**
 **QAForge** is a web application that automatically generates professional, structured QA test cases from a user story or feature description, using AI.
 
 ---
@@ -9,6 +9,7 @@
 
 - **Dark design system**: JetBrains Mono + Inter, calibration-ruler stepper, accordion TC cards with priority/technique/automation pills
 - **UX improvements**: session status in sidebar, confirmation before new session, ETA during generation, token warning before submit, progress bar always visible
+- **Session Settings (modal)**: company context injection + fully configurable output schema (priorities, optional fields) — session-only, no file writes
 - **5 LLM providers**: Gemini, OpenAI, Groq, Mistral, OpenRouter
 - **Multi-file upload**: PDF (text + images), DOCX (paragraphs + tables + images), TXT, MD, direct images (max 5 files)
 - **Smart extraction**: PDF via PyMuPDF (positional order), DOCX with Markdown tables, `[IMAGE_N — file]` markers
@@ -150,6 +151,19 @@ Two design rules worth knowing when modifying the app: **(1)** never bypass `app
 
 ---
 
+## 📄 Configuration files
+
+Two files at the repo root control permanent defaults (overridable per-session in Settings):
+
+| File | Purpose |
+|---|---|
+| `context.md` | Company/product context injected into AI prompts. Comment lines (`#`, `<!--`) are stripped before injection. Keep under 2000 chars. |
+| `output_schema.json` | Priority labels/emojis and optional field toggles. See the Settings section above for the full schema. |
+
+Both files are loaded once at startup via `@st.cache_resource`. Modifying them requires an app restart (or clearing the cache) — use the Settings modal for session-only changes.
+
+---
+
 ## 🚀 Installation
 
 ### Requirements
@@ -173,6 +187,47 @@ streamlit run app.py
 ---
 
 ## ⚙️ Configuration
+
+### Settings modal
+
+Click **⚙ Settings** at the top of the sidebar to open the modal. Changes apply to the current session only — nothing is written to disk.
+
+**Company Context** — free-text description of your product, domain vocabulary, naming conventions, and global business rules. Injected into Phase 1, Phase 2, and Phase 3 prompts to ground generation in your domain. Edit `context.md` for permanent defaults.
+
+**Output Schema** — editable JSON with two sections:
+
+```json
+{
+  "priorities": [
+    {"label": "Very High", "emoji": "🔴"},
+    {"label": "High",      "emoji": "🟠"},
+    {"label": "Medium",    "emoji": "🟡"},
+    {"label": "Low",       "emoji": "🟢"}
+  ],
+  "optional_fields": {
+    "technique":         true,
+    "type":              true,
+    "automation":        true,
+    "preconditions":     true,
+    "failure_signature": true
+  }
+}
+```
+
+- **priorities**: define as many or as few levels as you want (3 is common). Labels and emojis cascade automatically through Phase 2 buttons, prompts, filters, pills, and Testmo export — nothing hardcoded.
+- **optional_fields**: set to `false` to remove a field entirely from generated TCs, cards, exports, and prompts. Mandatory fields (`id`, `title`, `steps`, `expected_result`, `covers`) cannot be disabled.
+
+| Optional field | What it adds | Disable when |
+|---|---|---|
+| `technique` | Test design technique prefix (BVA, EP…) | You don't use ISO 29119-4 traceability |
+| `type` | Functional / Non-functional / Security… | Not relevant for your context |
+| `automation` | Automatable / Manual tag + ratio in summary | No automation planned |
+| `preconditions` | Pre-state required before test execution | Scenarios are always self-contained |
+| `failure_signature` | Observable symptom on failure (assertion hint) | No automated assertions planned |
+
+Edit `output_schema.json` for permanent defaults.
+
+### Sidebar parameters
 
 In the **sidebar**:
 
@@ -244,7 +299,7 @@ These techniques are designed to maximise **test coverage (recall)**. This means
 | Format       | Content                                                                                                                                                            |
 | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | **Markdown** | Formatted test cases with tables, numbered steps, expected results (derived from JSON)                                                                             |
-| **JSON**     | Structured array (source of truth): `id`, `title`, `technique`, `type`, `priority`, `automation`, `preconditions`, `steps`, `expected_result`, `failure_signature` |
+| **JSON**     | Structured array (source of truth): `id`, `title`, `priority`, `covers`, `steps`, `expected_result` (mandatory) + `technique`, `type`, `automation`, `preconditions`, `failure_signature` (optional — omitted when disabled in schema) |
 | **CSV**      | Excel / Google Sheets / Jira compatible — formula-injection safe, includes `covers` (BR-x traceability) and per-step expected results                              |
 
 ---
@@ -253,6 +308,9 @@ These techniques are designed to maximise **test coverage (recall)**. This means
 
 ```
 app.py
+├── File loaders          _load_context_file / _load_schema_file (@st.cache_resource)
+├── Session settings      get_priorities() / get_optional_fields() / company_context_block()
+│                         _settings_dialog() — st.dialog modal, session-only
 ├── Image utils           resize_image (max 1024px before API)
 ├── LLM Adapters          _gemini_client / _openai_client (cached)
 │                         call_gemini / call_openai / call_llm (unified router)
@@ -267,12 +325,15 @@ app.py
 ├── Diff helpers          apply_scenario_ops / apply_tc_ops (add/remove/modify merges)
 ├── Traceability          normalize_rules / coverage_gaps (BR-x ↔ scenarios)
 ├── HELP_TEXTS            Centralised tooltip strings — edit without touching UI logic
-├── Prompts               PROMPT_P1_QUESTIONS · PROMPT_P1_CHAT (structured updates)
-│                         PROMPT_P2 · PROMPT_P2_MODIFY (diff)
-│                         PROMPT_P3_GEN (JSON) · PROMPT_P3_MODIFY (diff)
+├── Prompts               build_prompt_p2() / build_prompt_p2_fewshot()
+│                         build_prompt_p2_modify() / build_prompt_p3_gen()
+│                         (all read priorities + optional_fields from session state)
+│                         PROMPT_P1_QUESTIONS · PROMPT_P1_CHAT (structured updates)
+│                         PROMPT_P2_REVIEW (self-refine diff)
+│                         PROMPT_P3_MODIFY (diff)
 ├── UI helpers            render_stepper (graduation-ruler, components.html)
-│                         render_tc_cards (accordion, components.html)
-│                         render_tc_summary (stats grid)
+│                         render_tc_cards (accordion cards, components.html)
+│                         render_tc_summary (stats grid, respects optional_fields)
 └── UI                    Phase 1 / Phase 2 / Phase 3
 ```
 
