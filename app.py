@@ -5,11 +5,44 @@ import io
 import json
 import csv
 import base64
+import os
 from collections import defaultdict
 from PIL import Image
 import docx
 import testmo_export as tme
 import clickup_import as cui
+
+# ── SETTINGS FILES ────────────────────────────────────────────────────────────
+_APP_DIR = os.path.dirname(os.path.abspath(__file__))
+
+@st.cache_resource
+def _load_context_file() -> str:
+    path = os.path.join(_APP_DIR, "context.md")
+    try:
+        with open(path, encoding="utf-8") as f:
+            return f.read()
+    except FileNotFoundError:
+        return ""
+
+@st.cache_resource
+def _load_schema_file() -> dict:
+    path = os.path.join(_APP_DIR, "output_schema.json")
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {
+            "priorities": [
+                {"label": "Very High", "emoji": "🔴"},
+                {"label": "High",      "emoji": "🟠"},
+                {"label": "Medium",    "emoji": "🟡"},
+                {"label": "Low",       "emoji": "🟢"},
+            ],
+            "optional_fields": {
+                "technique": True, "type": True, "automation": True,
+                "preconditions": True, "failure_signature": True,
+            },
+        }
 
 # ── Smart extraction — requires: pip install pymupdf python-docx Pillow
 # PyMuPDF is imported lazily so the app still starts even without it
@@ -280,11 +313,12 @@ def _generate_tc_batch(plan_ctx, batch):
     )
     msg = (
         f"{st.session_state.get('lang_directive', '')}"
+        f"{company_context_block()}"
         f"{plan_ctx}\n\n"
         f"Write ONE detailed test case for EACH of these {len(batch)} scenarios, "
         f"keeping the exact `id`, `title`, `priority` and `covers` given:\n{batch_list}"
     )
-    parsed = call_llm_json(PROMPT_P3_GEN, msg, max_tokens=min(800 * len(batch) + 800, 6000))
+    parsed = call_llm_json(build_prompt_p3_gen(), msg, max_tokens=min(800 * len(batch) + 800, 6000))
     tcs = parsed.get("test_cases", []) if isinstance(parsed, dict) else parsed
     got = {tc["id"]: tc for tc in tcs if _tc_is_complete(tc) and tc["id"] in want}
 
@@ -295,7 +329,7 @@ def _generate_tc_batch(plan_ctx, batch):
             for s in missing
         )
         parsed2 = call_llm_json(
-            PROMPT_P3_GEN,
+            build_prompt_p3_gen(),
             f"{plan_ctx}\n\nWrite ONE detailed test case for EACH of these scenarios, "
             f"keeping the exact `id`, `title` and `priority` given:\n{retry_list}",
             max_tokens=min(800 * len(missing) + 800, 6000),
@@ -347,10 +381,26 @@ def tc_to_markdown(tcs):
     """Deterministic Markdown rendering of structured test cases.
     The JSON is the single source of truth — MD/CSV are DERIVED from it,
     so exports can never diverge from what is displayed."""
+    fields = get_optional_fields()
     parts = []
     for tc in tcs:
-        pre = tc.get("preconditions", [])
-        pre_md = "<br>".join(f"- {p}" for p in pre) if isinstance(pre, list) else str(pre)
+        covers = tc.get("covers") or []
+        covers_md = ", ".join(str(c) for c in covers) if covers else "—"
+
+        table_rows = [f"| **ID** | {tc.get('id', '')} |"]
+        if fields.get("technique", True):
+            table_rows.append(f"| **Technique** | {tc.get('technique', '')} |")
+        if fields.get("type", True):
+            table_rows.append(f"| **Type** | {tc.get('type', '')} |")
+        table_rows.append(f"| **Priority** | {tc.get('priority', '')} |")
+        if fields.get("automation", True):
+            table_rows.append(f"| **Automation** | {tc.get('automation', '')} |")
+        table_rows.append(f"| **Covers** | {covers_md} |")
+        if fields.get("preconditions", True):
+            pre = tc.get("preconditions", [])
+            pre_md = "<br>".join(f"- {p}" for p in pre) if isinstance(pre, list) else str(pre)
+            table_rows.append(f"| **Preconditions** | {pre_md} |")
+
         steps = tc.get("steps", [])
         def _step_md(i, s):
             if not isinstance(s, dict):
@@ -360,32 +410,22 @@ def tc_to_markdown(tcs):
                 line += f'\n   → *Expected:* {s["expected"]}'
             return line
         steps_md = "\n".join(_step_md(i, s) for i, s in enumerate(steps))
-        covers = tc.get("covers") or []
-        covers_md = ", ".join(str(c) for c in covers) if covers else "—"
-        parts.append(
-            f"""---
+
+        body = f"""---
 ### {tc.get('id', 'TC-?')} — {tc.get('title', '')}
 
 | Field | Detail |
 |---|---|
-| **ID** | {tc.get('id', '')} |
-| **Technique** | {tc.get('technique', '')} |
-| **Type** | {tc.get('type', '')} |
-| **Priority** | {tc.get('priority', '')} |
-| **Automation** | {tc.get('automation', '')} |
-| **Covers** | {covers_md} |
-| **Preconditions** | {pre_md} |
-
+{"".join(r + chr(10) for r in table_rows)}
 **🔢 Test Steps**
 {steps_md}
 
 **✅ Expected Result**
 {tc.get('expected_result', '')}
-
-**🔴 Failure Signature**
-{tc.get('failure_signature', '')}
 """
-        )
+        if fields.get("failure_signature", True):
+            body += f"\n**🔴 Failure Signature**\n{tc.get('failure_signature', '')}\n"
+        parts.append(body)
     return "\n".join(parts)
 
 
@@ -1021,7 +1061,8 @@ hr { border-color: var(--border) !important; margin: 12px 0 !important; }
 
 def render_stepper():
     """Graduation-ruler stepper rendered via components.html (bypass Streamlit sanitizer)."""
-    phase = st.session_state.get("active_phase", 1)
+    raw_phase = st.session_state.get("active_phase", 1)
+    phase = st.session_state.get("_prev_active_phase", 1) if raw_phase == "settings" else raw_phase
     reached = st.session_state.get("phase_reached", 1)
 
     def _cls(p):
@@ -1099,16 +1140,20 @@ def render_tc_cards(tcs: list):
 
     import html as _html
 
-    prio_order = {"very high": 0, "high": 1, "medium": 2, "low": 3}
-    sorted_tcs = sorted(tcs, key=lambda t: prio_order.get((t.get("priority") or "").lower(), 9))
+    opt = get_optional_fields()
+    priorities = get_priorities()
 
-    prio_counts = {"Very High": 0, "High": 0, "Medium": 0, "Low": 0}
+    # Build priority sort order from schema
+    prio_order = {p["label"].lower(): i for i, p in enumerate(priorities)}
+    sorted_tcs = sorted(tcs, key=lambda t: prio_order.get((t.get("priority") or "").lower(), 99))
+
+    prio_counts = {p["label"]: 0 for p in priorities}
     auto_count = 0
     for tc in sorted_tcs:
         p = (tc.get("priority") or "").strip()
         if p in prio_counts:
             prio_counts[p] += 1
-        if "good" in (tc.get("automation") or "").lower():
+        if opt.get("automation", True) and "good" in (tc.get("automation") or "").lower():
             auto_count += 1
 
     def pill(text, cls=""):
@@ -1116,10 +1161,10 @@ def render_tc_cards(tcs: list):
 
     def prio_pill(p):
         pl = (p or "").lower()
-        if "very" in pl: return pill(p, "prio-vh")
-        if pl == "high":   return pill(p, "prio-hi")
-        if pl == "medium": return pill(p, "prio-md")
-        if pl == "low":    return pill(p, "prio-lo")
+        if "very" in pl or "critical" in pl: return pill(p, "prio-vh")
+        if "high" in pl:   return pill(p, "prio-hi")
+        if "medium" in pl or "med" in pl: return pill(p, "prio-md")
+        if "low" in pl:    return pill(p, "prio-lo")
         return pill(p)
 
     def auto_pill(a):
@@ -1139,16 +1184,20 @@ def render_tc_cards(tcs: list):
         failure  = _html.escape(str(tc.get("failure_signature", "") or ""))
 
         pills_str = prio_pill(prio)
-        if tech:
+        if opt.get("technique", True) and tech:
             pills_str += pill(tech)
-        pills_str += auto_pill(auto)
+        if opt.get("automation", True):
+            pills_str += auto_pill(auto)
         for br in covers:
             pills_str += pill(br, "br")
 
-        if isinstance(pre, list):
-            pre_str = "".join(f"<div>— {_html.escape(str(p))}</div>" for p in pre if str(p).strip()) or "—"
-        else:
-            pre_str = _html.escape(str(pre)) or "—"
+        pre_section = ""
+        if opt.get("preconditions", True):
+            if isinstance(pre, list):
+                pre_str = "".join(f"<div>— {_html.escape(str(p))}</div>" for p in pre if str(p).strip()) or "—"
+            else:
+                pre_str = _html.escape(str(pre)) or "—"
+            pre_section = f'<div class="sect"><div class="sect-lbl">Preconditions</div><div class="pre-text">{pre_str}</div></div>'
 
         step_rows = ""
         for i, s in enumerate(steps):
@@ -1162,6 +1211,10 @@ def render_tc_cards(tcs: list):
         if not step_rows:
             step_rows = "<tr><td colspan='3' style='color:#484f58;font-style:italic;'>No steps defined</td></tr>"
 
+        failure_section = ""
+        if opt.get("failure_signature", True):
+            failure_section = f'<div class="sect full"><div class="sect-lbl">Failure Signature</div><div class="fail-box">{failure or "—"}</div></div>'
+
         cards_html.append(f"""
         <div class="card">
           <div class="card-head" onclick="toggle(this)">
@@ -1171,10 +1224,7 @@ def render_tc_cards(tcs: list):
             <span class="chev">▶</span>
           </div>
           <div class="card-body">
-            <div class="sect">
-              <div class="sect-lbl">Preconditions</div>
-              <div class="pre-text">{pre_str}</div>
-            </div>
+            {pre_section}
             <div class="sect">
               <div class="sect-lbl">Expected Result</div>
               <div class="result-box">{expected or "—"}</div>
@@ -1184,24 +1234,18 @@ def render_tc_cards(tcs: list):
               <table><thead><tr><th>#</th><th>Action</th><th>Intermediate Expected</th></tr></thead>
               <tbody>{step_rows}</tbody></table>
             </div>
-            <div class="sect full">
-              <div class="sect-lbl">Failure Signature</div>
-              <div class="fail-box">{failure or "—"}</div>
-            </div>
+            {failure_section}
           </div>
         </div>""")
 
-    filter_bar = (
-        f'<div class="filter-bar">'
-        f'<span class="flbl">Filter</span>'
-        f'<span class="fchip">All ({len(sorted_tcs)})</span>'
-        f'<span class="fchip">🔴 VH ({prio_counts["Very High"]})</span>'
-        f'<span class="fchip">🟠 Hi ({prio_counts["High"]})</span>'
-        f'<span class="fchip">🟡 Md ({prio_counts["Medium"]})</span>'
-        f'<span class="fchip">🟢 Lo ({prio_counts["Low"]})</span>'
-        f'<span class="fchip" style="margin-left:auto">🤖 Auto ({auto_count})</span>'
-        f'</div>'
-    )
+    # Filter bar — dynamic priorities
+    filter_chips = f'<span class="fchip">All ({len(sorted_tcs)})</span>'
+    for p in priorities:
+        count = prio_counts.get(p["label"], 0)
+        filter_chips += f'<span class="fchip">{p["emoji"]} {p["label"][:2]} ({count})</span>'
+    if opt.get("automation", True):
+        filter_chips += f'<span class="fchip" style="margin-left:auto">🤖 Auto ({auto_count})</span>'
+    filter_bar = f'<div class="filter-bar"><span class="flbl">Filter</span>{filter_chips}</div>'
 
     # Height: 44px per card header + 400px per open body (all closed by default)
     # We give enough room for all headers + a comfortable scroll
@@ -1334,7 +1378,7 @@ with st.sidebar:
     if st.session_state.get("us_submitted") or _reached > 1:
         st.divider()
         st.markdown("**📍 Current session**")
-        _phase_labels = {1: "Phase 1 — Analysis", 2: "Phase 2 — Plan", 3: "Phase 3 — Test Cases"}
+        _phase_labels = {1: "Phase 1 — Analysis", 2: "Phase 2 — Plan", 3: "Phase 3 — Test Cases", "settings": "⚙ Settings"}
         st.caption(f"Active: {_phase_labels.get(_phase, '—')}")
         if st.session_state.get("p1_user_story"):
             _preview = st.session_state.p1_user_story[:60].replace("\n", " ")
@@ -1516,10 +1560,49 @@ defaults = {
     "testmo_projects": None, "testmo_templates": None, "testmo_templates_pid": None,
     "testmo_last_push": [], "testmo_pushed_sig": None,
     "temperature": 0.2, "p2_scenarios": [], "p2_summary": "", "p2_review": {}, "p2_last_reply": "", "p2_overlaps": [],
+    # Settings — loaded from files, editable per session
+    "settings_company_context": None,
+    "settings_output_schema": None,
+    "_prev_active_phase": 1,
 }
 for k, v in defaults.items():
     if k not in st.session_state:
         st.session_state[k] = v
+
+# Load settings files into session state once per session
+if st.session_state.settings_company_context is None:
+    st.session_state.settings_company_context = _load_context_file()
+if st.session_state.settings_output_schema is None:
+    st.session_state.settings_output_schema = _load_schema_file()
+
+
+def get_priorities() -> list:
+    """Return the list of priority dicts from the active schema."""
+    return st.session_state.settings_output_schema.get("priorities", [
+        {"label": "Very High", "emoji": "🔴"},
+        {"label": "High",      "emoji": "🟠"},
+        {"label": "Medium",    "emoji": "🟡"},
+        {"label": "Low",       "emoji": "🟢"},
+    ])
+
+
+def get_optional_fields() -> dict:
+    """Return the optional_fields dict from the active schema."""
+    return st.session_state.settings_output_schema.get("optional_fields", {
+        "technique": True, "type": True, "automation": True,
+        "preconditions": True, "failure_signature": True,
+    })
+
+
+def company_context_block() -> str:
+    """Return a formatted context block to prepend to LLM prompts, or '' if empty."""
+    ctx = (st.session_state.settings_company_context or "").strip()
+    # Strip comment lines from context.md
+    lines = [l for l in ctx.splitlines() if not l.strip().startswith("#") and not l.strip().startswith("<!--")]
+    ctx = "\n".join(lines).strip()
+    if not ctx:
+        return ""
+    return f"--- COMPANY CONTEXT ---\n{ctx}\n---\n\n"
 
 # ── PROMPTS ───────────────────────────────────────────────────────────────────
 PROMPT_P1_QUESTIONS = """
@@ -1817,7 +1900,7 @@ Rules:
   and leave the three arrays empty.
 """
 
-PROMPT_P3_GEN = """
+_PROMPT_P3_GEN_BASE = """
 You are a Senior QA Test Architect writing execution-ready test cases aligned with
 ISO/IEC/IEEE 29119-4 and experience-based test design techniques.
 
@@ -1831,25 +1914,41 @@ ISO/IEC/IEEE 29119-4 and experience-based test design techniques.
 - Use terminology strictly consistent with the requirements document
   (consistent terminology → higher recall against reference tests).
 - Write ALL text content in the SAME LANGUAGE as the requirements.
+"""
 
+
+def build_prompt_p3_gen() -> str:
+    """Build PROMPT_P3_GEN dynamically from the active output schema."""
+    priorities = get_priorities()
+    prio_values = " | ".join(p["label"] for p in priorities)
+    fields = get_optional_fields()
+
+    schema_lines = ['      "id": "TC-1",', '      "title": "…",']
+    if fields.get("technique", True):
+        schema_lines.append('      "technique": "BVA | Decision Table | Equivalence | State Transition | Error Guessing | Exploratory | Function Combination | Happy Path | Alternate Flow",')
+    if fields.get("type", True):
+        schema_lines.append('      "type": "Happy Path | Alternate | BVA | Equivalence | Decision Table | State Transition | Negative | Edge Case | Security | Function Combination | Error Guessing | Exploratory",')
+    schema_lines.append(f'      "priority": "{prio_values}",')
+    if fields.get("automation", True):
+        schema_lines.append('      "automation": "Good candidate" or "Manual only — (reason)",')
+    schema_lines.append('      "covers": ["BR-1"],')
+    if fields.get("preconditions", True):
+        schema_lines.append('      "preconditions": ["state, role, data"],')
+    schema_lines.append('      "steps": [{"step_number": 1, "action": "action with exact data or boundary value", "expected": "observable intermediate outcome (OPTIONAL — only when the step has one)"}],')
+    schema_lines.append('      "expected_result": "exact observable outcome in natural language"')
+    if fields.get("failure_signature", True):
+        schema_lines.append('      ,"failure_signature": "what the tester sees on failure"')
+
+    schema_str = "\n".join(schema_lines)
+    return _PROMPT_P3_GEN_BASE + f"""
 ## OUTPUT FORMAT (STRICT JSON object — no markdown, no preamble)
-{
+{{
   "test_cases": [
-    {
-      "id": "TC-1",
-      "title": "…",
-      "technique": "BVA | Decision Table | Equivalence | State Transition | Error Guessing | Exploratory | Function Combination | Happy Path | Alternate Flow",
-      "type": "Happy Path | Alternate | BVA | Equivalence | Decision Table | State Transition | Negative | Edge Case | Security | Function Combination | Error Guessing | Exploratory",
-      "priority": "Very High | High | Medium | Low",
-      "automation": "Good candidate" or "Manual only — (reason)",
-      "covers": ["BR-1"],
-      "preconditions": ["state, role, data"],
-      "steps": [{"step_number": 1, "action": "action with exact data or boundary value", "expected": "observable intermediate outcome (OPTIONAL — only when the step has one)"}],
-      "expected_result": "exact observable outcome in natural language",
-      "failure_signature": "what the tester sees on failure"
-    }
+    {{
+{schema_str}
+    }}
   ]
-}
+}}
 
 ## HARD CONSTRAINTS
 - Generate EXACTLY one test case per requested scenario — no more, no less.
@@ -1858,6 +1957,9 @@ ISO/IEC/IEEE 29119-4 and experience-based test design techniques.
   intermediate outcome (test-management tools like Squash TM / TestLink use it).
 - Do NOT add commentary, summaries, or extra keys.
 """
+
+
+PROMPT_P3_GEN = _PROMPT_P3_GEN_BASE  # kept for reference; use build_prompt_p3_gen() at call sites
 
 PROMPT_P3_MODIFY = """
 You are a Senior QA Test Architect maintaining a set of structured test cases.
@@ -2200,14 +2302,25 @@ def _csv_safe(v):
 
 def build_csv(data):
     if not data: return ""
+    opt = get_optional_fields()
+    all_fields = ["id", "title"]
+    if opt.get("technique", True): all_fields.append("technique")
+    if opt.get("type", True): all_fields.append("type")
+    all_fields.append("priority")
+    if opt.get("automation", True): all_fields.append("automation")
+    all_fields.append("covers")
+    if opt.get("preconditions", True): all_fields.append("preconditions")
+    all_fields += ["steps", "expected_result"]
+    if opt.get("failure_signature", True): all_fields.append("failure_signature")
+
     out = io.StringIO()
-    fields = ["id","title","technique","type","priority","automation","covers","preconditions","steps","expected_result","failure_signature"]
-    writer = csv.DictWriter(out, fieldnames=fields, extrasaction="ignore")
+    writer = csv.DictWriter(out, fieldnames=all_fields, extrasaction="ignore")
     writer.writeheader()
     for row in data:
         r = dict(row)
-        pre = r.get("preconditions", [])
-        r["preconditions"] = " | ".join(pre) if isinstance(pre, list) else str(pre)
+        if "preconditions" in all_fields:
+            pre = r.get("preconditions", [])
+            r["preconditions"] = " | ".join(pre) if isinstance(pre, list) else str(pre)
         cov = r.get("covers", [])
         r["covers"] = " | ".join(str(c) for c in cov) if isinstance(cov, list) else str(cov)
         steps = r.get("steps", [])
@@ -2220,18 +2333,18 @@ def build_csv(data):
             r["steps"] = " | ".join(_step_csv(s) for s in steps)
         else:
             r["steps"] = str(steps)
-        writer.writerow({k: _csv_safe(r.get(k, "")) for k in fields})
+        writer.writerow({k: _csv_safe(r.get(k, "")) for k in all_fields})
     return out.getvalue()
 
 # ── TAB BAR ───────────────────────────────────────────────────────────────────
 def render_tab_bar():
     pr, ap = st.session_state.phase_reached, st.session_state.active_phase
     phase_meta = {
-        1: ("Analysis",   HELP_TEXTS["phase1"],      HELP_TEXTS["phase1_locked"]),
-        2: ("Test Checklist",  HELP_TEXTS["phase2"],      HELP_TEXTS["phase2_locked"]),
-        3: ("Test Cases", HELP_TEXTS["phase3"],      HELP_TEXTS["phase2_locked"]),
+        1: ("Analysis",      HELP_TEXTS["phase1"],      HELP_TEXTS["phase1_locked"]),
+        2: ("Test Checklist", HELP_TEXTS["phase2"],     HELP_TEXTS["phase2_locked"]),
+        3: ("Test Cases",    HELP_TEXTS["phase3"],      HELP_TEXTS["phase2_locked"]),
     }
-    cols = st.columns(3)
+    cols = st.columns([1, 1, 1, 0.55])
     for i, (n, (label, help_active, help_locked)) in enumerate(phase_meta.items()):
         with cols[i]:
             if n > pr:
@@ -2245,6 +2358,17 @@ def render_tab_bar():
                               help=help_active):
                     st.session_state.active_phase = n
                     st.rerun()
+    with cols[3]:
+        is_settings = ap == "settings"
+        if st.button("⚙ Settings", key="tab_settings", use_container_width=True,
+                     type="primary" if is_settings else "secondary"):
+            if is_settings:
+                # Go back to previous phase
+                st.session_state.active_phase = st.session_state.get("_prev_active_phase", 1)
+            else:
+                st.session_state._prev_active_phase = ap
+                st.session_state.active_phase = "settings"
+            st.rerun()
 
 # ═════════════════════════════════════════════════════════════════════════════
 st.title("🧪 QAForge — AI Test Case Generator")
@@ -2402,7 +2526,7 @@ if st.session_state.active_phase == 1:
                 # ── Build prompt ──────────────────────────────────────────────
                 lang_directive = output_language_directive(us_input)
                 st.session_state.lang_directive = lang_directive
-                prompt = f"{lang_directive}Please analyze the following User Story:\n\n{us_input}"
+                prompt = f"{lang_directive}{company_context_block()}Please analyze the following User Story:\n\n{us_input}"
 
                 if doc_texts:
                     prompt += "\n\n=== ATTACHED DOCUMENTS ===\n" + "\n\n".join(doc_texts)
@@ -2558,6 +2682,7 @@ if st.session_state.active_phase == 1:
                         f"- {r['id']}: {r['rule']}" for r in st.session_state.p1_business_rules
                     )
                     ctx_msg = (
+                        f"{company_context_block()}"
                         f"Current understanding: {st.session_state.p1_summary}\n\n"
                         f"Current business rules:\n{cur_rules}\n\n"
                         f"Questions and answers so far:\n{cur_answers}\n\n"
@@ -2630,6 +2755,7 @@ if st.session_state.active_phase == 1:
 
             ctx = (
                 f"{st.session_state.get('lang_directive', '')}"
+                f"{company_context_block()}"
                 f"User Story:\n{st.session_state.p1_user_story}\n\n"
                 f"Requirements Analysis Summary:\n{st.session_state.p1_summary}"
                 f"{rules_ctx}{screens_ctx}{iso_ctx}{chat_ctx}\n\n"
@@ -2763,37 +2889,30 @@ elif st.session_state.active_phase == 2:
             cat = s.get("category", "")
             cat_icon = CAT_ICONS.get(cat, "📌")
 
-            c1, c2, c3, c4, c5, c6, c7 = st.columns([0.5, 0.5, 3.5, 1.2, 1.2, 1.2, 1.2])
-            with c1:
+            priorities = get_priorities()
+            n_prio_cols = len(priorities)
+            prio_col_widths = [0.5, 0.5, 3.5] + [1.2] * n_prio_cols
+            prio_cols = st.columns(prio_col_widths)
+            with prio_cols[0]:
                 if st.button("✅", key=f"sel_{sid}", help="Include in Phase 3",
                              type="primary" if is_sel else "secondary"):
                     st.session_state.p2_review[sid]["selected"] = True; st.rerun()
-            with c2:
+            with prio_cols[1]:
                 if st.button("❌", key=f"del_{sid}", help="Exclude from Phase 3",
                              type="primary" if not is_sel else "secondary"):
                     st.session_state.p2_review[sid]["selected"] = False; st.rerun()
-            with c3:
+            with prio_cols[2]:
                 label = f"{cat_icon} {s['title']}"
                 st.markdown(f"~~{label}~~" if not is_sel else label)
                 covers = s.get("covers") or []
                 if covers:
                     st.caption("covers: " + ", ".join(str(c) for c in covers))
-            with c4:
-                if st.button("🔴 Very High", key=f"pvh_{sid}",
-                             type="primary" if cur_prio=="Very High" else "secondary"):
-                    st.session_state.p2_review[sid]["priority"] = "Very High"; st.rerun()
-            with c5:
-                if st.button("🟠 High", key=f"phi_{sid}",
-                             type="primary" if cur_prio=="High" else "secondary"):
-                    st.session_state.p2_review[sid]["priority"] = "High"; st.rerun()
-            with c6:
-                if st.button("🟡 Medium", key=f"pmd_{sid}",
-                             type="primary" if cur_prio=="Medium" else "secondary"):
-                    st.session_state.p2_review[sid]["priority"] = "Medium"; st.rerun()
-            with c7:
-                if st.button("🟢 Low", key=f"plw_{sid}",
-                             type="primary" if cur_prio=="Low" else "secondary"):
-                    st.session_state.p2_review[sid]["priority"] = "Low"; st.rerun()
+            for pi, p in enumerate(priorities):
+                with prio_cols[3 + pi]:
+                    btn_label = f"{p['emoji']} {p['label']}"
+                    if st.button(btn_label, key=f"p{pi}_{sid}",
+                                 type="primary" if cur_prio == p["label"] else "secondary"):
+                        st.session_state.p2_review[sid]["priority"] = p["label"]; st.rerun()
 
     else:
         st.info("No scenarios yet — validate Phase 1 to generate the test plan.")
@@ -2965,3 +3084,68 @@ elif st.session_state.active_phase == 3:
                 st.session_state.p3_chat_log.append({"role": "assistant", "content": reply_text})
                 st.rerun()
             except Exception as e: handle_error(e)
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  SETTINGS PAGE
+# ═════════════════════════════════════════════════════════════════════════════
+elif st.session_state.active_phase == "settings":
+    st.markdown('<div class="badge b1">⚙️ Settings — Session Configuration</div>', unsafe_allow_html=True)
+    st.caption("Changes apply to this session only. Edit the source files (`context.md`, `output_schema.json`) for permanent changes.")
+
+    # ── Section 1: Company Context ────────────────────────────────────────────
+    st.markdown("### 📋 Company Context")
+    st.caption("Injected into AI prompts (Phase 1 analysis, Phase 1 chat, Phase 2 plan generation, Phase 3 test case generation) to ground test generation in your domain.")
+
+    ctx_val = st.text_area(
+        "Company context",
+        value=st.session_state.settings_company_context,
+        height=220,
+        placeholder="Describe your company domain, vocabulary, abbreviations, global business rules…",
+        label_visibility="collapsed",
+    )
+    col_ctx_apply, col_ctx_reset, _ = st.columns([1, 1, 4])
+    with col_ctx_apply:
+        if st.button("✅ Apply", key="ctx_apply", use_container_width=True, type="primary"):
+            st.session_state.settings_company_context = ctx_val
+            st.success("Context updated for this session.")
+    with col_ctx_reset:
+        if st.button("↩ Reset", key="ctx_reset", use_container_width=True):
+            st.session_state.settings_company_context = _load_context_file()
+            st.rerun()
+
+    st.divider()
+
+    # ── Section 2: Output Schema ──────────────────────────────────────────────
+    st.markdown("### 🗂️ Output Schema")
+    st.caption("Controls the priorities available in Phase 2 and the fields generated in Phase 3. Edit the JSON below.")
+
+    schema_raw = st.text_area(
+        "Output schema (JSON)",
+        value=json.dumps(st.session_state.settings_output_schema, indent=2, ensure_ascii=False),
+        height=280,
+        label_visibility="collapsed",
+    )
+
+    col_schema_apply, col_schema_reset, col_schema_info = st.columns([1, 1, 4])
+    with col_schema_apply:
+        if st.button("✅ Apply", key="schema_apply", use_container_width=True, type="primary"):
+            try:
+                parsed_schema = json.loads(schema_raw)
+                # Validate minimal structure
+                if "priorities" not in parsed_schema or not isinstance(parsed_schema["priorities"], list):
+                    st.error("❌ `priorities` must be a non-empty list.")
+                elif len(parsed_schema["priorities"]) == 0:
+                    st.error("❌ At least one priority is required.")
+                elif "optional_fields" not in parsed_schema or not isinstance(parsed_schema.get("optional_fields"), dict):
+                    st.error("❌ `optional_fields` must be a dict.")
+                else:
+                    st.session_state.settings_output_schema = parsed_schema
+                    st.success("Schema updated for this session.")
+            except json.JSONDecodeError as e:
+                st.error(f"❌ Invalid JSON: {e}")
+    with col_schema_reset:
+        if st.button("↩ Reset", key="schema_reset", use_container_width=True):
+            st.session_state.settings_output_schema = _load_schema_file()
+            st.rerun()
+    with col_schema_info:
+        st.caption("**priorities**: list of `{label, emoji}` — order defines Phase 2 button order. **optional_fields**: set to `false` to remove a field from generation and exports.")

@@ -1,0 +1,16 @@
+{
+  "_comment": "QAForge output schema. Edit this file for permanent changes, or use the Settings page for session-only overrides.",
+  "priorities": [
+    {"label": "Very High", "emoji": "🔴"},
+    {"label": "High",      "emoji": "🟠"},
+    {"label": "Medium",    "emoji": "🟡"},
+    {"label": "Low",       "emoji": "🟢"}
+  ],
+  "optional_fields": {
+    "technique":        true,
+    "type":             true,
+    "automation":       true,
+    "preconditions":    true,
+    "failure_signature": true
+  }
+}
